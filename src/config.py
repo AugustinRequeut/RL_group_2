@@ -29,15 +29,18 @@ SHARED_CORE_CONFIG = {
     "reward_speed_range": [22, 30],
     "normalize_reward": True,
     "offroad_terminal": True,
+    "simulation_frequency": 15,
+    "policy_frequency": 5,
 }
 
 TRAINING_CONFIG = {
-    "gamma": 0.8,
-    "batch_size": 64,
-    "buffer_capacity": 15_000,
-    "update_target_every": 50,
-    "epsilon_start": 1,
-    "decrease_epsilon_factor": 500,
-    "epsilon_min": 0.01,
-    "learning_rate": 5e-4,
+    "gamma": 0.97,
+    "batch_size": 128,
+    "buffer_capacity": 50_000,
+    "update_target_every": 500,
+    "epsilon_start": 1.0,
+    "decrease_epsilon_factor": 1000,
+    "epsilon_min": 0.05,
+    "learning_rate": 1e-4,
+    "num_envs": 4
 }
