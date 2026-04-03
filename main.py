@@ -1,7 +1,7 @@
 import gymnasium as gym
 import highway_env
 import numpy as np
-from src.dqn import DQN
+from src.dqn import DQN, REINFORCEBaseline
 from src.evaluate import evaluate_policy
 from src.config import SHARED_CORE_CONFIG, SHARED_CORE_ENV_ID, TRAINING_CONFIG
 from src.train import train_agent
@@ -24,7 +24,7 @@ def main():
 
     # Strip num_envs before passing to DQN
     training_config = {k: v for k, v in TRAINING_CONFIG.items() if k != "num_envs"}
-    agent = DQN(action_space, observation_space, **training_config)
+    agent = REINFORCEBaseline(action_space, observation_space, **training_config)
 
     losses, rewards = train_agent(training_env, agent, n_episodes=50)
 

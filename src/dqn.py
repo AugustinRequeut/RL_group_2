@@ -175,3 +175,85 @@ class DQN:
         self.epsilon = self.epsilon_start
         self.n_steps = 0
         self.n_eps = 0
+
+class REINFORCEBaseline(DQN):
+    def __init__(
+        self,
+        action_space,
+        observation_space,
+        gamma,
+        batch_size,
+        buffer_capacity,
+        update_target_every,
+        epsilon_start,
+        decrease_epsilon_factor,
+        epsilon_min,
+        learning_rate,
+    ):
+        super().__init__(action_space,
+        observation_space,
+        gamma,
+        batch_size,
+        buffer_capacity,
+        update_target_every,
+        epsilon_start,
+        decrease_epsilon_factor,
+        epsilon_min,
+        learning_rate)
+        
+        self.current_episode = []
+
+    def get_action(self, state, epsilon=None):
+        state_tensor = torch.tensor(state).unsqueeze(0)
+        with torch.no_grad():
+            h = self.q_net(state_tensor)
+            policy = torch.softmax(h, dim=1)
+            return torch.multinomial(policy, 1)[0,0].numpy()
+        
+    def _gradient_returns(self, rewards, gamma):
+        """
+        Turns a list of rewards into the list of returns * gamma**t
+        """
+        G = 0
+        returns_list = []
+        T = len(rewards)
+        full_gamma = np.power(gamma, T)
+        for t in range(T):
+            G = rewards[T-t-1] + gamma * G
+            full_gamma /= gamma
+            returns_list.append(full_gamma * G)
+        return torch.tensor(returns_list[::-1])
+    
+    def update(self, state, action, reward, terminated, truncated, next_state):
+        
+        self.current_episode.append((
+            torch.tensor(state).unsqueeze(0),
+            torch.tensor([[int(action)]], dtype=torch.int64),
+            torch.tensor([reward]),
+        )
+        )
+
+        if terminated or truncated:
+
+            states, actions, rewards = tuple(
+                [torch.cat(data) for data in zip(*self.current_episode)]
+            )
+
+            gain_t = self._gradient_returns(rewards, self.gamma).float()
+
+            b_t = gain_t.mean()
+
+            h = self.q_net(states)
+            log_probs = torch.log_softmax(h, dim=1)
+
+            full_neg_score = - torch.dot(log_probs.gather(1, actions).squeeze(-1), (gain_t-b_t)).unsqueeze(0)
+
+            self.current_episode = []
+
+            self.optimizer.zero_grad()
+            full_neg_score.backward()
+            self.optimizer.step()
+
+            return full_neg_score.detach().numpy()
+        
+        return None
