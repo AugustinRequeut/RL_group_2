@@ -1,6 +1,7 @@
 from tqdm import tqdm
 import numpy as np
 
+
 def train_agent(env, agent, n_episodes, eval_every=20):
     all_losses = []
     all_rewards = []
@@ -12,7 +13,8 @@ def train_agent(env, agent, n_episodes, eval_every=20):
     with tqdm(total=n_episodes, desc="Training Progress") as pbar:
         while completed_episodes < n_episodes:
             actions = np.array([agent.get_action(s) for s in states])
-            next_states, rewards, terminateds, truncateds, _ = env.step(actions)
+            next_states, rewards, terminateds, truncateds, _ = env.step(
+                actions)
 
             # Push one transition per parallel env
             for i in range(env.num_envs):
@@ -34,7 +36,8 @@ def train_agent(env, agent, n_episodes, eval_every=20):
                     completed_episodes += 1
                     pbar.update(1)
                     if completed_episodes % eval_every == 0:
-                        tqdm.write(f" Ep {completed_episodes}: Last Reward = {all_rewards[-1]:.2f}")
+                        tqdm.write(
+                            f" Ep {completed_episodes}: Last Reward = {all_rewards[-1]:.2f}")
 
             states = next_states
 
