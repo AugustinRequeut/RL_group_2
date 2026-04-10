@@ -19,8 +19,9 @@ Le repo contient maintenant deux scripts comparables:
 
 ### 1) Lancer les expériences (mêmes seeds)
 
+
 ```bash
-for SEED in 0 1 2 3 4; do
+for SEED in 0 1 2; do
   ./.venv/bin/python custom_dqn_baseline.py --seed $SEED --timesteps 100000 --eval-runs 50
   ./.venv/bin/python sb3_dqn_baseline.py --seed $SEED --timesteps 100000 --eval-runs 50
 done
@@ -60,3 +61,30 @@ Chaque run sauvegarde aussi une vidéo dans:
 
 - `results/custom_dqn/seed_<SEED>/video/`
 - `results/sb3_dqn/seed_<SEED>/video/`
+
+### Générer des vidéos après entraînement (sans retrain)
+
+On peut enregistrer plusieurs rollouts depuis un checkpoint déjà entraîné:
+
+```bash
+# Custom DQN (exemple: checkpoint seed 0)
+./.venv/bin/python record_trained_videos.py \
+  --algo custom \
+  --checkpoint results/custom_dqn/seed_0/custom_dqn_qnet.pt \
+  --n-videos 3 \
+  --output-dir results/post_train_videos
+
+# SB3 DQN (exemple: checkpoint seed 0)
+./.venv/bin/python record_trained_videos.py \
+  --algo sb3 \
+  --checkpoint results/sb3_dqn/seed_0/sb3_dqn_model.zip \
+  --n-videos 3 \
+  --output-dir results/post_train_videos
+```
+
+Les vidéos sont sauvegardées dans:
+
+- `results/post_train_videos/custom/`
+- `results/post_train_videos/sb3/`
+
+En environnement sans affichage, ajouter `--headless` (plus robuste, mais peut produire une vidéo noire selon la machine).
