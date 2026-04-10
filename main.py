@@ -26,7 +26,7 @@ def main():
     training_config = {k: v for k, v in TRAINING_CONFIG.items() if k != "num_envs"}
     agent = DQN(action_space, observation_space, **training_config)
 
-    losses, rewards = train_agent(training_env, agent, n_episodes=50)
+    losses, rewards = train_agent(training_env, agent, n_episodes=100)
 
     plot_learning_curves(losses, rewards, agent.epsilon_history)
 

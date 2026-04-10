@@ -29,8 +29,8 @@ SHARED_CORE_CONFIG = {
     "reward_speed_range": [22, 30],
     "normalize_reward": True,
     "offroad_terminal": True,
-    "simulation_frequency": 15,
-    "policy_frequency": 5,
+    # "simulation_frequency": 15,
+    # "policy_frequency": 5,
 }
 
 TRAINING_CONFIG = {
