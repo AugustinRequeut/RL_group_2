@@ -11,7 +11,7 @@
 
 ## Compare Custom DQN vs SB3 DQN
 
-Le repo contient maintenant deux scripts comparables:
+Le repo contient des scripts suivants:
 
 - `custom_dqn_baseline.py`: entraîne le DQN maison.
 - `sb3_dqn_baseline.py`: entraîne le DQN de Stable-Baselines3.
