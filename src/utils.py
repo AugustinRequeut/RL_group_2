@@ -1,30 +1,58 @@
 import matplotlib.pyplot as plt
 import os
 import gymnasium as gym
+import json
 from gymnasium.wrappers import RecordVideo
 
-def plot_learning_curves(losses, rewards, save_dir="results"):
+def plot_learning_curves(losses, rewards, save_dir="results", filename="learning_performance.png"):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+    if losses is None or len(losses) == 0:
+        fig, ax = plt.subplots(1, 1, figsize=(10, 4))
+        ax.plot(rewards, color="blue")
+        ax.set_title("Rewards per Episode")
+        ax.set_xlabel("Episodes")
+        ax.set_ylabel("Reward")
+        ax.grid(True)
+    else:
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
 
-    # Graphique de la perte (Loss)
-    ax1.plot(losses, color='red')
-    ax1.set_title('Training Loss')
-    ax1.set_ylabel('Loss')
-    ax1.grid(True)
+        ax1.plot(losses, color="red")
+        ax1.set_title("Training Loss")
+        ax1.set_ylabel("Loss")
+        ax1.grid(True)
 
-    # Graphique des récompenses (Version simple)
-    ax2.plot(rewards, color='blue')
-    ax2.set_title('Rewards per Episode')
-    ax2.set_xlabel('Episodes')
-    ax2.set_ylabel('Reward')
-    ax2.grid(True)
+        ax2.plot(rewards, color="blue")
+        ax2.set_title("Rewards per Episode")
+        ax2.set_xlabel("Episodes")
+        ax2.set_ylabel("Reward")
+        ax2.grid(True)
 
     plt.tight_layout()
-    plt.savefig(f"{save_dir}/learning_performance.png")
-    plt.show()
+    plt.savefig(os.path.join(save_dir, filename))
+    plt.close(fig)
+
+
+def plot_episode_rewards(rewards, save_path):
+    if rewards is None or len(rewards) == 0:
+        return
+
+    save_dir = os.path.dirname(save_path) or "."
+    filename = os.path.basename(save_path)
+    plot_learning_curves(
+        losses=None,
+        rewards=rewards,
+        save_dir=save_dir,
+        filename=filename,
+    )
+
+
+def export_episode_rewards_dict(rewards, save_path):
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    episode_rewards = {f"episode_{i+1}": float(r) for i, r in enumerate(rewards)}
+    with open(save_path, "w", encoding="utf-8") as f:
+        json.dump(episode_rewards, f, indent=2)
 
 def record_final_agent_video(agent, render_env, save_dir="results/video"):
     def _policy_fn(state):

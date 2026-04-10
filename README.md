@@ -56,10 +56,19 @@ Ce mode utilise, par défaut:
 - `timesteps=20000`
 - `eval-runs=10`
 
+Pour afficher la reward pendant le train:
+
+- `--log-train-every 20` (par défaut)
+
 Chaque run sauvegarde aussi une vidéo dans:
 
 - `results/custom_dqn/seed_<SEED>/video/`
 - `results/sb3_dqn/seed_<SEED>/video/`
+
+Chaque seed exporte aussi les artefacts d'entraînement:
+
+- `train_reward_per_episode.png` (graphe reward/épisode)
+- `train_episode_rewards.json` (dictionnaire `episode_i -> reward`)
 
 ### Générer des vidéos après entraînement (sans retrain)
 

@@ -56,10 +56,14 @@ def train_agent(env, agent, n_episodes=None, total_timesteps=None, eval_every=20
                     completed_episodes += 1
                     if n_episodes is not None:
                         pbar.update(1)
-                        if completed_episodes % eval_every == 0:
-                            tqdm.write(
-                                f" Ep {completed_episodes}: Last Reward = {all_rewards[-1]:.2f}"
-                            )
+                    if eval_every > 0 and completed_episodes % eval_every == 0:
+                        recent = all_rewards[-eval_every:]
+                        recent_mean = float(np.mean(recent)) if recent else float("nan")
+                        tqdm.write(
+                            f" Ep {completed_episodes}: "
+                            f"Last Reward = {all_rewards[-1]:.2f} | "
+                            f"Mean(last {eval_every}) = {recent_mean:.2f}"
+                        )
 
             states = next_states
 

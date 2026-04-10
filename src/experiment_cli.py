@@ -9,13 +9,18 @@ import highway_env  # noqa: F401
 import numpy as np
 import torch
 from stable_baselines3 import DQN as SB3DQN
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
 
 from src.config import SHARED_CORE_CONFIG, SHARED_CORE_ENV_ID, TRAINING_CONFIG
 from src.dqn import DQN, REINFORCEBaseline
 from src.evaluate import evaluate_policy
 from src.train import train_agent
-from src.utils import plot_learning_curves, record_policy_video_from_config
+from src.utils import (
+    export_episode_rewards_dict,
+    plot_learning_curves,
+    record_policy_video_from_config,
+)
 
 
 DEFAULT_OUTPUT_DIRS = {
@@ -23,6 +28,30 @@ DEFAULT_OUTPUT_DIRS = {
     "sb3": "results/sb3_dqn",
     "reinforce": "results/reinforce",
 }
+
+
+class EpisodeRewardCallback(BaseCallback):
+    def __init__(self, log_every_episodes: int = 20):
+        super().__init__()
+        self.episode_rewards = []
+        self.log_every_episodes = log_every_episodes
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        for info in infos:
+            episode_info = info.get("episode")
+            if episode_info is not None and "r" in episode_info:
+                reward = float(episode_info["r"])
+                self.episode_rewards.append(reward)
+                n = len(self.episode_rewards)
+                if self.log_every_episodes > 0 and n % self.log_every_episodes == 0:
+                    recent = self.episode_rewards[-self.log_every_episodes :]
+                    recent_mean = float(np.mean(recent))
+                    print(
+                        f"[SB3 train] Ep {n}: Last Reward = {reward:.2f} | "
+                        f"Mean(last {self.log_every_episodes}) = {recent_mean:.2f}"
+                    )
+        return True
 
 
 def seed_everything(seed: int) -> None:
@@ -97,6 +126,17 @@ def _evaluate_and_record(
     return eval_rewards, video_reward, video_error
 
 
+def _save_training_episode_artifacts(run_dir: Path, train_rewards: list[float]) -> None:
+    np.save(run_dir / "train_rewards.npy", np.array(train_rewards, dtype=np.float32))
+    export_episode_rewards_dict(train_rewards, str(run_dir / "train_episode_rewards.json"))
+    plot_learning_curves(
+        losses=None,
+        rewards=train_rewards,
+        save_dir=str(run_dir),
+        filename="train_reward_per_episode.png",
+    )
+
+
 def _run_custom(args) -> None:
     seed_everything(args.seed)
 
@@ -124,10 +164,18 @@ def _run_custom(args) -> None:
         env=train_env,
         agent=agent,
         total_timesteps=args.timesteps,
+        eval_every=args.log_train_every,
     )
 
+    _save_training_episode_artifacts(run_dir=run_dir, train_rewards=train_rewards)
+
     if args.plot_curves:
-        plot_learning_curves(losses, train_rewards, save_dir=str(run_dir))
+        plot_learning_curves(
+            losses=losses,
+            rewards=train_rewards,
+            save_dir=str(run_dir),
+            filename="learning_performance.png",
+        )
 
     eval_policy_fn = lambda state: agent.get_action(state, epsilon=0.0)
     eval_rewards, video_reward, video_error = _evaluate_and_record(
@@ -160,7 +208,6 @@ def _run_custom(args) -> None:
 
     if eval_rewards:
         np.save(run_dir / "eval_rewards.npy", np.array(eval_rewards, dtype=np.float32))
-    np.save(run_dir / "train_rewards.npy", np.array(train_rewards, dtype=np.float32))
     np.save(run_dir / "train_losses.npy", np.array(losses, dtype=np.float32))
     torch.save(agent.q_net.state_dict(), run_dir / "custom_dqn_qnet.pt")
 
@@ -210,9 +257,17 @@ def _run_sb3(args) -> None:
         verbose=1,
     )
 
-    model.learn(total_timesteps=args.timesteps, progress_bar=args.progress_bar)
+    reward_callback = EpisodeRewardCallback(log_every_episodes=args.log_train_every)
+    model.learn(
+        total_timesteps=args.timesteps,
+        progress_bar=args.progress_bar,
+        callback=reward_callback,
+    )
     model_path = run_dir / "sb3_dqn_model"
     model.save(str(model_path))
+    train_rewards = reward_callback.episode_rewards
+
+    _save_training_episode_artifacts(run_dir=run_dir, train_rewards=train_rewards)
 
     eval_policy_fn = lambda state: model.predict(state, deterministic=True)[0]
     eval_rewards, video_reward, video_error = _evaluate_and_record(
@@ -232,6 +287,7 @@ def _run_sb3(args) -> None:
         "seed": args.seed,
         "timesteps": args.timesteps,
         "eval_runs": 0 if args.no_eval else args.eval_runs,
+        "train_completed_episodes": len(train_rewards),
         "mean_reward": float(np.mean(eval_rewards)) if eval_rewards else None,
         "std_reward": float(np.std(eval_rewards)) if eval_rewards else None,
         "video_reward": float(video_reward) if video_reward is not None else None,
@@ -286,10 +342,18 @@ def _run_reinforce(args) -> None:
         env=train_env,
         agent=agent,
         n_episodes=args.episodes,
+        eval_every=args.log_train_every,
     )
 
+    _save_training_episode_artifacts(run_dir=run_dir, train_rewards=train_rewards)
+
     if args.plot_curves:
-        plot_learning_curves(losses, train_rewards, save_dir=str(run_dir))
+        plot_learning_curves(
+            losses=losses,
+            rewards=train_rewards,
+            save_dir=str(run_dir),
+            filename="learning_performance.png",
+        )
 
     eval_policy_fn = lambda state: agent.get_action(state, epsilon=0.0)
     eval_rewards, video_reward, video_error = _evaluate_and_record(
@@ -322,7 +386,6 @@ def _run_reinforce(args) -> None:
 
     if eval_rewards:
         np.save(run_dir / "eval_rewards.npy", np.array(eval_rewards, dtype=np.float32))
-    np.save(run_dir / "train_rewards.npy", np.array(train_rewards, dtype=np.float32))
     np.save(run_dir / "train_losses.npy", np.array(losses, dtype=np.float32))
     torch.save(agent.q_net.state_dict(), run_dir / "reinforce_qnet.pt")
 
@@ -384,6 +447,12 @@ def _build_parser(model_override: str | None = None) -> argparse.ArgumentParser:
         "--plot-curves",
         action="store_true",
         help="Save training curves for custom/reinforce.",
+    )
+    parser.add_argument(
+        "--log-train-every",
+        type=int,
+        default=20,
+        help="Print training reward statistics every N completed episodes.",
     )
     parser.add_argument(
         "--headless-video",
