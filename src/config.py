@@ -44,3 +44,11 @@ TRAINING_CONFIG = {
     "learning_rate": 1e-4,
     "num_envs": 4
 }
+
+ACTOR_CRITIC_TRAINING_CONFIG = {
+    "gamma": 0.97,
+    "lambda_": 0.95,
+    "actor_learning_rate": 1e-4,
+    "critic_learning_rate": 1e-4,
+    "num_envs": 4
+}
