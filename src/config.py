@@ -29,8 +29,8 @@ SHARED_CORE_CONFIG = {
     "reward_speed_range": [22, 30],
     "normalize_reward": True,
     "offroad_terminal": True,
-    "simulation_frequency": 15,
-    "policy_frequency": 5,
+    # "simulation_frequency": 15,
+    # "policy_frequency": 5,
 }
 
 TRAINING_CONFIG = {
@@ -42,5 +42,13 @@ TRAINING_CONFIG = {
     "decrease_epsilon_factor": 1000,
     "epsilon_min": 0.05,
     "learning_rate": 1e-4,
+    "num_envs": 4
+}
+
+ACTOR_CRITIC_TRAINING_CONFIG = {
+    "gamma": 0.97,
+    "lambda_": 0.95,
+    "actor_learning_rate": 1e-4,
+    "critic_learning_rate": 1e-4,
     "num_envs": 4
 }
