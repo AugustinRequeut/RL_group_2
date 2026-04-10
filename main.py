@@ -24,11 +24,11 @@ def main():
 
     # Strip num_envs before passing to DQN
     training_config = {k: v for k, v in TRAINING_CONFIG.items() if k != "num_envs"}
-    agent = REINFORCEBaseline(action_space, observation_space, **training_config)
+    agent = DQN(action_space, observation_space, **training_config)
 
     losses, rewards = train_agent(training_env, agent, n_episodes=50)
 
-    plot_learning_curves(losses, rewards)
+    plot_learning_curves(losses, rewards, agent.epsilon_history)
 
     final_scores = evaluate_policy(agent, eval_env, n_runs=5)
     print(f"Final Reward : {np.mean(final_scores):.2f} (+/- {np.std(final_scores):.2f})")

@@ -2,11 +2,11 @@ import matplotlib.pyplot as plt
 import os
 from gymnasium.wrappers import RecordVideo
 
-def plot_learning_curves(losses, rewards, save_dir="results"):
+def plot_learning_curves(losses, rewards, epsilon_history, save_dir="results"):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12))
 
     # Graphique de la perte (Loss)
     ax1.plot(losses, color='red')
@@ -20,6 +20,14 @@ def plot_learning_curves(losses, rewards, save_dir="results"):
     ax2.set_xlabel('Episodes')
     ax2.set_ylabel('Reward')
     ax2.grid(True)
+
+    # Graphique de epsilon
+    ax3.plot(epsilon_history, color='green')
+    ax3.set_title('Epsilon over Updates')
+    ax3.set_xlabel('Update steps')
+    ax3.set_ylabel('Epsilon')
+    ax3.set_ylim(0, 1)
+    ax3.grid(True)
 
     plt.tight_layout()
     plt.savefig(f"{save_dir}/learning_performance.png")

@@ -156,6 +156,7 @@ class DQN:
         self.epsilon = self.epsilon_min + (self.epsilon_start - self.epsilon_min) * (
             np.exp(-1.0 * self.n_eps / self.decrease_epsilon_factor)
         )
+        self.epsilon_history.append(self.epsilon)
 
     def reset(self):
         hidden_size = 256
@@ -175,6 +176,7 @@ class DQN:
         self.epsilon = self.epsilon_start
         self.n_steps = 0
         self.n_eps = 0
+        self.epsilon_history = []
 
 class REINFORCEBaseline(DQN):
     def __init__(
