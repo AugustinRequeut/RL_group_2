@@ -40,8 +40,12 @@ def train_agent(env, agent, n_episodes=None, total_timesteps=None, eval_every=20
                     bool(truncateds[i]),
                     next_states[i],
                 )
-                if loss is not None and np.isfinite(loss):
-                    all_losses.append(float(loss))
+                if loss is not None:
+                    loss_arr = np.asarray(loss, dtype=np.float32).reshape(-1)
+                    if loss_arr.size > 0:
+                        loss_value = float(loss_arr[0])
+                        if np.isfinite(loss_value):
+                            all_losses.append(loss_value)
 
             episode_rewards += rewards
             dones = terminateds | truncateds

@@ -13,8 +13,7 @@
 
 Le repo contient des scripts suivants:
 
-- `custom_dqn_baseline.py`: entraîne le DQN maison.
-- `sb3_dqn_baseline.py`: entraîne le DQN de Stable-Baselines3.
+- `main.py`: entrée unique avec `--model custom|sb3|reinforce`.
 - `compare_dqn_results.py`: agrège les métriques et compare les deux.
 
 ### 1) Lancer les expériences (mêmes seeds)
@@ -22,8 +21,8 @@ Le repo contient des scripts suivants:
 
 ```bash
 for SEED in 0 1 2; do
-  ./.venv/bin/python custom_dqn_baseline.py --seed $SEED --timesteps 100000 --eval-runs 50
-  ./.venv/bin/python sb3_dqn_baseline.py --seed $SEED --timesteps 100000 --eval-runs 50
+  ./.venv/bin/python main.py --model custom --seed $SEED --timesteps 100000 --eval-runs 50
+  ./.venv/bin/python main.py --model sb3 --seed $SEED --timesteps 100000 --eval-runs 50
 done
 ```
 
@@ -47,8 +46,8 @@ Pour tester plus vite, utilisez le preset `--quick`:
 
 ```bash
 for SEED in 0 1 2; do
-  ./.venv/bin/python custom_dqn_baseline.py --seed $SEED --quick --record-video
-  ./.venv/bin/python sb3_dqn_baseline.py --seed $SEED --quick --record-video
+  ./.venv/bin/python main.py --model custom --seed $SEED --quick --record-video
+  ./.venv/bin/python main.py --model sb3 --seed $SEED --quick --record-video
 done
 ```
 
