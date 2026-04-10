@@ -26,7 +26,7 @@ def main():
     training_config = {k: v for k, v in ACTOR_CRITIC_TRAINING_CONFIG.items() if k != "num_envs"}
     agent = ActorCriticGAE(action_space, observation_space, **training_config)
 
-    losses, rewards = train_agent(training_env, agent, n_episodes=500)
+    losses, rewards = train_agent(training_env, agent, n_episodes=100)
 
     plot_learning_curves(losses, rewards, agent.epsilon_history)
 
