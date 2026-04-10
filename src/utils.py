@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import os
+import gymnasium as gym
 from gymnasium.wrappers import RecordVideo
 
 def plot_learning_curves(losses, rewards, save_dir="results"):
@@ -26,25 +27,82 @@ def plot_learning_curves(losses, rewards, save_dir="results"):
     plt.show()
 
 def record_final_agent_video(agent, render_env, save_dir="results/video"):
+    def _policy_fn(state):
+        return agent.get_action(state, epsilon=0)
 
-    video_env = RecordVideo(
-        render_env, 
-        video_folder=save_dir,
-        episode_trigger=lambda x: True,
-        disable_logger=True,
-        name_prefix="final_agent_run"
+    total_reward = record_policy_video(
+        render_env=render_env,
+        policy_fn=_policy_fn,
+        save_dir=save_dir,
+        name_prefix="final_agent_run",
     )
-    
+    print(f"Video episode total reward: {total_reward:.2f}")
+
+
+def record_policy_video(
+    render_env,
+    policy_fn,
+    save_dir="results/video",
+    name_prefix="rollout",
+    seed=None,
+):
+    video_env = RecordVideo(
+        render_env,
+        video_folder=save_dir,
+        episode_trigger=lambda _: True,
+        disable_logger=True,
+        name_prefix=name_prefix,
+    )
+
     try:
-        state, _ = video_env.reset()
+        if seed is None:
+            state, _ = video_env.reset()
+        else:
+            state, _ = video_env.reset(seed=seed)
         done = truncated = False
-        total_reward = 0
+        total_reward = 0.0
 
         while not (done or truncated):
-            action = agent.get_action(state, epsilon=0)
+            action = int(policy_fn(state))
             state, reward, done, truncated, _ = video_env.step(action)
             total_reward += reward
-
-        print(f"Video episode total reward: {total_reward:.2f}")
     finally:
         video_env.close()
+
+    return float(total_reward)
+
+
+def make_render_env(env_id, env_config, headless=True):
+    video_config = dict(env_config)
+    if headless:
+        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+        video_config["offscreen_rendering"] = True
+
+    return gym.make(
+        env_id,
+        render_mode="rgb_array",
+        config=video_config,
+    )
+
+
+def record_policy_video_from_config(
+    policy_fn,
+    env_id,
+    env_config,
+    save_dir="results/video",
+    name_prefix="rollout",
+    seed=None,
+    headless=True,
+):
+    render_env = make_render_env(
+        env_id=env_id,
+        env_config=env_config,
+        headless=headless,
+    )
+    return record_policy_video(
+        render_env=render_env,
+        policy_fn=policy_fn,
+        save_dir=save_dir,
+        name_prefix=name_prefix,
+        seed=seed,
+    )

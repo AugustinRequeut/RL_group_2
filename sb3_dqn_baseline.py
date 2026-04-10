@@ -1,73 +1,17 @@
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
 import gymnasium as gym
 import highway_env  # noqa: F401
 import numpy as np
-from gymnasium.wrappers import RecordVideo
 from stable_baselines3 import DQN as SB3DQN
 from stable_baselines3.common.env_util import make_vec_env
 
 from src.config import SHARED_CORE_CONFIG, SHARED_CORE_ENV_ID
-
-
-def evaluate_sb3_model(model: SB3DQN, n_runs: int, seed_start: int) -> list[float]:
-    rewards: list[float] = []
-
-    for i in range(n_runs):
-        env = gym.make(SHARED_CORE_ENV_ID, config=SHARED_CORE_CONFIG)
-        obs, _ = env.reset(seed=seed_start + i)
-
-        done = False
-        truncated = False
-        total_reward = 0.0
-
-        while not (done or truncated):
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, truncated, _ = env.step(int(action))
-            total_reward += float(reward)
-
-        rewards.append(total_reward)
-        env.close()
-
-    return rewards
-
-
-def record_sb3_video(model: SB3DQN, video_dir: Path, seed: int) -> tuple[float, Path]:
-    video_dir.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    video_config = dict(SHARED_CORE_CONFIG)
-    video_config["offscreen_rendering"] = True
-    env = gym.make(
-        SHARED_CORE_ENV_ID,
-        render_mode="rgb_array",
-        config=video_config,
-    )
-    video_env = RecordVideo(
-        env,
-        video_folder=str(video_dir),
-        episode_trigger=lambda _: True,
-        disable_logger=True,
-        name_prefix=f"sb3_dqn_seed_{seed}",
-    )
-
-    try:
-        obs, _ = video_env.reset(seed=20_000 + seed * 1_000)
-        done = False
-        truncated = False
-        total_reward = 0.0
-
-        while not (done or truncated):
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, truncated, _ = video_env.step(int(action))
-            total_reward += float(reward)
-    finally:
-        video_env.close()
-
-    return total_reward, video_dir
+from src.evaluate import evaluate_policy
+from src.utils import record_policy_video_from_config
 
 
 def main() -> None:
@@ -152,10 +96,16 @@ def main() -> None:
     model_path = run_dir / "sb3_dqn_model"
     model.save(str(model_path))
 
+    eval_env_factory = lambda: gym.make(SHARED_CORE_ENV_ID, config=SHARED_CORE_CONFIG)
+    eval_policy_fn = lambda state: model.predict(state, deterministic=True)[0]
+
     eval_rewards: list[float] = []
     if not args.no_eval:
-        eval_rewards = evaluate_sb3_model(
-            model=model, n_runs=eval_runs, seed_start=10_000 + args.seed * 1_000
+        eval_rewards = evaluate_policy(
+            policy_fn=eval_policy_fn,
+            env_factory=eval_env_factory,
+            n_runs=eval_runs,
+            seed_start=10_000 + args.seed * 1_000,
         )
 
     video_reward = None
@@ -163,8 +113,15 @@ def main() -> None:
     if args.record_video:
         try:
             video_dir = Path(args.video_dir) if args.video_dir else run_dir / "video"
-            video_reward, _ = record_sb3_video(
-                model=model, video_dir=video_dir, seed=args.seed
+            video_dir.mkdir(parents=True, exist_ok=True)
+            video_reward = record_policy_video_from_config(
+                policy_fn=eval_policy_fn,
+                env_id=SHARED_CORE_ENV_ID,
+                env_config=SHARED_CORE_CONFIG,
+                save_dir=str(video_dir),
+                name_prefix=f"sb3_dqn_seed_{args.seed}",
+                seed=20_000 + args.seed * 1_000,
+                headless=True,
             )
         except Exception as exc:
             video_error = str(exc)
@@ -194,7 +151,7 @@ def main() -> None:
         )
     else:
         print(f"SB3 DQN | seed={args.seed} | evaluation skipped")
-    if args.record_video:
+    if video_reward is not None:
         print(f"SB3 DQN video reward (seed={args.seed}): {video_reward:.2f}")
     print(f"Model saved to: {model_path}.zip")
     print(f"Metrics saved to: {run_dir / 'metrics.json'}")

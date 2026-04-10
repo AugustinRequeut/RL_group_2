@@ -1,15 +1,14 @@
 import argparse
-import os
 from pathlib import Path
 
 import gymnasium as gym
 import highway_env  # noqa: F401
 import torch
-from gymnasium.wrappers import RecordVideo
 from stable_baselines3 import DQN as SB3DQN
 
 from src.config import SHARED_CORE_CONFIG, SHARED_CORE_ENV_ID, TRAINING_CONFIG
 from src.dqn import DQN
+from src.utils import record_policy_video_from_config
 
 
 def load_custom_agent(checkpoint_path: Path) -> DQN:
@@ -28,48 +27,6 @@ def load_custom_agent(checkpoint_path: Path) -> DQN:
     agent.target_net.load_state_dict(state_dict)
     env.close()
     return agent
-
-
-def record_one_episode(
-    algo: str,
-    predictor,
-    out_dir: Path,
-    base_seed: int,
-    video_idx: int,
-    headless: bool,
-) -> float:
-    video_config = dict(SHARED_CORE_CONFIG)
-    if headless:
-        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-        video_config["offscreen_rendering"] = True
-
-    env = gym.make(
-        SHARED_CORE_ENV_ID,
-        render_mode="rgb_array",
-        config=video_config,
-    )
-    wrapped_env = RecordVideo(
-        env,
-        video_folder=str(out_dir),
-        episode_trigger=lambda _: True,
-        disable_logger=True,
-        name_prefix=f"{algo}_rollout_{video_idx}",
-    )
-
-    try:
-        obs, _ = wrapped_env.reset(seed=base_seed + video_idx)
-        done = False
-        truncated = False
-        total_reward = 0.0
-
-        while not (done or truncated):
-            action = predictor(obs)
-            obs, reward, done, truncated, _ = wrapped_env.step(int(action))
-            total_reward += float(reward)
-    finally:
-        wrapped_env.close()
-
-    return total_reward
 
 
 def main() -> None:
@@ -110,12 +67,13 @@ def main() -> None:
     rewards = []
     for i in range(args.n_videos):
         rewards.append(
-            record_one_episode(
-                algo=args.algo,
-                predictor=predictor,
-                out_dir=out_dir,
-                base_seed=args.seed,
-                video_idx=i,
+            record_policy_video_from_config(
+                policy_fn=predictor,
+                env_id=SHARED_CORE_ENV_ID,
+                env_config=SHARED_CORE_CONFIG,
+                save_dir=str(out_dir),
+                name_prefix=f"{args.algo}_rollout_{i}",
+                seed=args.seed + i,
                 headless=args.headless,
             )
         )

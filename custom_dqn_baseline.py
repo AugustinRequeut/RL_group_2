@@ -1,6 +1,5 @@
 import argparse
 import json
-import os
 import random
 from pathlib import Path
 import sys
@@ -9,111 +8,18 @@ import gymnasium as gym
 import highway_env  # noqa: F401
 import numpy as np
 import torch
-from gymnasium.wrappers import RecordVideo
 
 from src.config import SHARED_CORE_CONFIG, SHARED_CORE_ENV_ID, TRAINING_CONFIG
 from src.dqn import DQN
+from src.evaluate import evaluate_policy
+from src.train import train_agent
+from src.utils import record_policy_video_from_config
 
 
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-
-
-def evaluate_custom_model(agent: DQN, n_runs: int, seed_start: int) -> list[float]:
-    rewards: list[float] = []
-
-    for i in range(n_runs):
-        env = gym.make(SHARED_CORE_ENV_ID, config=SHARED_CORE_CONFIG)
-        obs, _ = env.reset(seed=seed_start + i)
-
-        done = False
-        truncated = False
-        total_reward = 0.0
-
-        while not (done or truncated):
-            action = int(agent.get_action(obs, epsilon=0.0))
-            obs, reward, done, truncated, _ = env.step(action)
-            total_reward += float(reward)
-
-        rewards.append(total_reward)
-        env.close()
-
-    return rewards
-
-
-def record_custom_video(agent: DQN, video_dir: Path, seed: int) -> tuple[float, Path]:
-    video_dir.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    video_config = dict(SHARED_CORE_CONFIG)
-    video_config["offscreen_rendering"] = True
-    env = gym.make(
-        SHARED_CORE_ENV_ID,
-        render_mode="rgb_array",
-        config=video_config,
-    )
-    video_env = RecordVideo(
-        env,
-        video_folder=str(video_dir),
-        episode_trigger=lambda _: True,
-        disable_logger=True,
-        name_prefix=f"custom_dqn_seed_{seed}",
-    )
-
-    try:
-        obs, _ = video_env.reset(seed=20_000 + seed * 1_000)
-        done = False
-        truncated = False
-        total_reward = 0.0
-
-        while not (done or truncated):
-            action = int(agent.get_action(obs, epsilon=0.0))
-            obs, reward, done, truncated, _ = video_env.step(action)
-            total_reward += float(reward)
-    finally:
-        video_env.close()
-
-    return total_reward, video_dir
-
-
-def train_custom_dqn(agent: DQN, env, total_timesteps: int):
-    losses: list[float] = []
-    completed_episode_rewards: list[float] = []
-
-    obs, _ = env.reset()
-    episode_rewards = np.zeros(env.num_envs, dtype=np.float32)
-
-    steps_collected = 0
-
-    while steps_collected < total_timesteps:
-        actions = np.array([agent.get_action(s) for s in obs])
-        next_obs, rewards, terminateds, truncateds, _ = env.step(actions)
-
-        for i in range(env.num_envs):
-            loss = agent.update(
-                obs[i],
-                int(actions[i]),
-                float(rewards[i]),
-                bool(terminateds[i]),
-                bool(truncateds[i]),
-                next_obs[i],
-            )
-            if loss is not None and np.isfinite(loss):
-                losses.append(float(loss))
-
-        episode_rewards += rewards
-        dones = terminateds | truncateds
-
-        for i, done in enumerate(dones):
-            if done:
-                completed_episode_rewards.append(float(episode_rewards[i]))
-                episode_rewards[i] = 0.0
-
-        obs = next_obs
-        steps_collected += env.num_envs
-
-    return losses, completed_episode_rewards
 
 
 def main() -> None:
@@ -188,16 +94,20 @@ def main() -> None:
         **dqn_cfg,
     )
 
-    losses, train_rewards = train_custom_dqn(
-        agent=agent,
+    losses, train_rewards = train_agent(
         env=train_env,
+        agent=agent,
         total_timesteps=timesteps,
     )
 
+    eval_env_factory = lambda: gym.make(SHARED_CORE_ENV_ID, config=SHARED_CORE_CONFIG)
+    eval_policy_fn = lambda state: agent.get_action(state, epsilon=0.0)
+
     eval_rewards: list[float] = []
     if not args.no_eval:
-        eval_rewards = evaluate_custom_model(
-            agent=agent,
+        eval_rewards = evaluate_policy(
+            policy_fn=eval_policy_fn,
+            env_factory=eval_env_factory,
             n_runs=eval_runs,
             seed_start=10_000 + args.seed * 1_000,
         )
@@ -207,8 +117,15 @@ def main() -> None:
     if args.record_video:
         try:
             video_dir = Path(args.video_dir) if args.video_dir else run_dir / "video"
-            video_reward, _ = record_custom_video(
-                agent=agent, video_dir=video_dir, seed=args.seed
+            video_dir.mkdir(parents=True, exist_ok=True)
+            video_reward = record_policy_video_from_config(
+                policy_fn=eval_policy_fn,
+                env_id=SHARED_CORE_ENV_ID,
+                env_config=SHARED_CORE_CONFIG,
+                save_dir=str(video_dir),
+                name_prefix=f"custom_dqn_seed_{args.seed}",
+                seed=20_000 + args.seed * 1_000,
+                headless=True,
             )
         except Exception as exc:
             video_error = str(exc)
@@ -243,7 +160,7 @@ def main() -> None:
         )
     else:
         print(f"Custom DQN | seed={args.seed} | evaluation skipped")
-    if args.record_video:
+    if video_reward is not None:
         print(f"Custom DQN video reward (seed={args.seed}): {video_reward:.2f}")
     print(f"Metrics saved to: {run_dir / 'metrics.json'}")
 
