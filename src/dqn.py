@@ -1,6 +1,7 @@
 # Imports
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import random
@@ -52,6 +53,43 @@ class Net(nn.Module):
 
     def forward(self, x):
         return self.net(x.float())
+    
+class AttentionNet(nn.Module):
+    """
+    Permutation-invariant network for kinematic observations.
+    Each vehicle is treated as a token; multi-head attention
+    aggregates the fleet before predicting Q-values.
+    """
+
+    def __init__(self, obs_shape, hidden_size, n_actions, n_heads=8):
+        super(AttentionNet, self).__init__()
+        n_vehicles, n_features = obs_shape
+        
+        self.embedding = nn.Linear(n_features, hidden_size)
+
+        self.attention = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=n_heads,
+            batch_first=True,
+        )
+        self.norm = nn.LayerNorm(hidden_size)
+
+        self.head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, n_actions),
+        )
+
+    def forward(self, x):
+
+        tokens = F.relu(self.embedding(x))
+
+        attended, _ = self.attention(tokens, tokens, tokens)
+        tokens = self.norm(tokens + attended)          # residual connection
+
+        pooled = tokens.mean(dim=1)
+
+        return self.head(pooled)
 
 
 class DQN:
@@ -164,8 +202,10 @@ class DQN:
         n_actions = self.action_space.n
 
         self.buffer = ReplayBuffer(self.buffer_capacity)
-        self.q_net = Net(obs_shape, hidden_size, n_actions)
-        self.target_net = Net(obs_shape, hidden_size, n_actions)
+        #self.q_net = Net(obs_shape, hidden_size, n_actions)
+        self.q_net = AttentionNet(obs_shape, hidden_size, n_actions)
+        #self.target_net = Net(obs_shape, hidden_size, n_actions)
+        self.target_net = AttentionNet(obs_shape, hidden_size, n_actions)
 
         self.loss_function = nn.MSELoss()
         self.optimizer = optim.Adam(
