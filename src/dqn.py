@@ -16,11 +16,17 @@ class ReplayBuffer:
         """Saves a transition."""
         if len(self.memory) < self.capacity:
             self.memory.append(None)
-        self.memory[self.position] = (state, action, reward, terminated, next_state)
+        self.memory[self.position] = (
+            np.array(state, dtype=np.float32),
+            action,
+            float(reward),
+            bool(terminated),
+            np.array(next_state, dtype=np.float32),
+        )
         self.position = (self.position + 1) % self.capacity
 
     def sample(self, batch_size):
-        return random.choices(self.memory, k=batch_size)
+        return random.sample(self.memory, k=batch_size)
 
     def __len__(self):
         return len(self.memory)
@@ -38,6 +44,8 @@ class Net(nn.Module):
         self.net = nn.Sequential(
             nn.Flatten(),
             nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, n_actions),
         )
@@ -78,29 +86,22 @@ class DQN:
 
         self.reset()
 
-    def update(self, state, action, reward, terminated, next_state):
+    def update(self, state, action, reward, terminated, truncated, next_state):
         # add data to replay buffer
-        self.buffer.push(
-            torch.tensor(state).unsqueeze(0).float(),
-            torch.tensor([[action]], dtype=torch.int64),
-            torch.tensor([reward]).float(),
-            torch.tensor([terminated], dtype=torch.int64),
-            torch.tensor(next_state).unsqueeze(0).float(),
-        )
+        self.buffer.push(state, action, reward, terminated, next_state)
 
         if len(self.buffer) < self.batch_size:
             return np.inf
 
         # get batch
         transitions = self.buffer.sample(self.batch_size)
+        states, actions, rewards, terminateds, next_states = zip(*transitions)
 
-        (
-            state_batch,
-            action_batch,
-            reward_batch,
-            terminated_batch,
-            next_state_batch,
-        ) = tuple([torch.cat(data) for data in zip(*transitions)])
+        state_batch = torch.tensor(np.array(states), dtype=torch.float32)
+        action_batch = torch.tensor(np.array(actions), dtype=torch.int64).unsqueeze(1)
+        reward_batch = torch.tensor(np.array(rewards), dtype=torch.float32)
+        terminated_batch = torch.tensor(np.array(terminateds), dtype=torch.int64)
+        next_state_batch = torch.tensor(np.array(next_states), dtype=torch.float32)
 
         values = self.q_net.forward(state_batch).gather(1, action_batch)
 
@@ -116,7 +117,7 @@ class DQN:
         # Optimize the model
         self.optimizer.zero_grad()
         loss.backward()
-        # torch.nn.utils.clip_grad_value_(self.q_net.parameters(), 100)
+        torch.nn.utils.clip_grad_value_(self.q_net.parameters(), 100)
         self.optimizer.step()
 
         if not ((self.n_steps + 1) % self.update_target_every):
@@ -125,7 +126,7 @@ class DQN:
         self.decrease_epsilon()
 
         self.n_steps += 1
-        if terminated:
+        if terminated or truncated:
             self.n_eps += 1
 
         return loss.detach().numpy()
@@ -157,7 +158,7 @@ class DQN:
         )
 
     def reset(self):
-        hidden_size = 128
+        hidden_size = 256
 
         obs_shape = self.observation_space.shape
         n_actions = self.action_space.n
@@ -174,3 +175,85 @@ class DQN:
         self.epsilon = self.epsilon_start
         self.n_steps = 0
         self.n_eps = 0
+
+class REINFORCEBaseline(DQN):
+    def __init__(
+        self,
+        action_space,
+        observation_space,
+        gamma,
+        batch_size,
+        buffer_capacity,
+        update_target_every,
+        epsilon_start,
+        decrease_epsilon_factor,
+        epsilon_min,
+        learning_rate,
+    ):
+        super().__init__(action_space,
+        observation_space,
+        gamma,
+        batch_size,
+        buffer_capacity,
+        update_target_every,
+        epsilon_start,
+        decrease_epsilon_factor,
+        epsilon_min,
+        learning_rate)
+        
+        self.current_episode = []
+
+    def get_action(self, state, epsilon=None):
+        state_tensor = torch.tensor(state).unsqueeze(0)
+        with torch.no_grad():
+            h = self.q_net(state_tensor)
+            policy = torch.softmax(h, dim=1)
+            return torch.multinomial(policy, 1)[0,0].numpy()
+        
+    def _gradient_returns(self, rewards, gamma):
+        """
+        Turns a list of rewards into the list of returns * gamma**t
+        """
+        G = 0
+        returns_list = []
+        T = len(rewards)
+        full_gamma = np.power(gamma, T)
+        for t in range(T):
+            G = rewards[T-t-1] + gamma * G
+            full_gamma /= gamma
+            returns_list.append(full_gamma * G)
+        return torch.tensor(returns_list[::-1])
+    
+    def update(self, state, action, reward, terminated, truncated, next_state):
+        
+        self.current_episode.append((
+            torch.tensor(state).unsqueeze(0),
+            torch.tensor([[int(action)]], dtype=torch.int64),
+            torch.tensor([reward]),
+        )
+        )
+
+        if terminated or truncated:
+
+            states, actions, rewards = tuple(
+                [torch.cat(data) for data in zip(*self.current_episode)]
+            )
+
+            gain_t = self._gradient_returns(rewards, self.gamma).float()
+
+            b_t = gain_t.mean()
+
+            h = self.q_net(states)
+            log_probs = torch.log_softmax(h, dim=1)
+
+            full_neg_score = - torch.dot(log_probs.gather(1, actions).squeeze(-1), (gain_t-b_t)).unsqueeze(0)
+
+            self.current_episode = []
+
+            self.optimizer.zero_grad()
+            full_neg_score.backward()
+            self.optimizer.step()
+
+            return full_neg_score.detach().numpy()
+        
+        return None

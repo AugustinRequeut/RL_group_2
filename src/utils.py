@@ -35,15 +35,16 @@ def record_final_agent_video(agent, render_env, save_dir="results/video"):
         name_prefix="final_agent_run"
     )
     
-    state, _ = video_env.reset()
-    video_env.render()
-    
-    done = truncated = False
-    total_reward = 0
-    
-    while not (done or truncated):
-        action = agent.get_action(state, epsilon=0) 
-        state, reward, terminated, truncated, _ = video_env.step(action)
-        total_reward += reward
-        
-    video_env.close()
+    try:
+        state, _ = video_env.reset()
+        done = truncated = False
+        total_reward = 0
+
+        while not (done or truncated):
+            action = agent.get_action(state, epsilon=0)
+            state, reward, done, truncated, _ = video_env.step(action)
+            total_reward += reward
+
+        print(f"Video episode total reward: {total_reward:.2f}")
+    finally:
+        video_env.close()
