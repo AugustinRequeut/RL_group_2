@@ -16,14 +16,26 @@ Le repo contient des scripts suivants:
 - `main.py`: entrée unique avec `--model custom|sb3|reinforce`.
 - `compare_dqn_results.py`: agrège les métriques et compare les deux.
 
-### 1) Lancer les expériences (mêmes seeds)
+### 1) Lancer les expériences
 
 
 ```bash
 for SEED in 0 1 2; do
-  ./.venv/bin/python main.py --model custom --seed $SEED --timesteps 100000 --eval-runs 50
-  ./.venv/bin/python main.py --model sb3 --seed $SEED --timesteps 100000 --eval-runs 50
+  ./.venv/bin/python main.py --model custom --seed $SEED --timesteps 50000 --eval-runs 50
+  ./.venv/bin/python main.py --model sb3 --seed $SEED --timesteps 50000 --eval-runs 50
 done
+```
+
+### 1bis) Lancer 3 seeds en parallèle 
+
+```bash
+# Custom DQN: seeds 0,1,2 en parallèle
+seq 0 2 | xargs -I{} -P 3 ./.venv/bin/python main.py \
+  --model custom --seed {} --timesteps 50000 --eval-runs 50
+
+# SB3 DQN: seeds 0,1,2 en parallèle
+seq 0 2 | xargs -I{} -P 3 ./.venv/bin/python main.py \
+  --model sb3 --seed {} --timesteps 50000 --eval-runs 50
 ```
 
 ### 2) Agréger la comparaison
@@ -46,29 +58,50 @@ Pour tester plus vite, utilisez le preset `--quick`:
 
 ```bash
 for SEED in 0 1 2; do
-  ./.venv/bin/python main.py --model custom --seed $SEED --quick --record-video
-  ./.venv/bin/python main.py --model sb3 --seed $SEED --quick --record-video
+  ./.venv/bin/python main.py --model custom --seed $SEED --quick
+  ./.venv/bin/python main.py --model sb3 --seed $SEED --quick
 done
 ```
 
 Ce mode utilise, par défaut:
 
-- `timesteps=20000`
+- `timesteps=5000`
 - `eval-runs=10`
 
 Pour afficher la reward pendant le train:
 
-- `--log-train-every 20` (par défaut)
+- `--log-train-every 50` (par défaut)
 
-Chaque run sauvegarde aussi une vidéo dans:
-
-- `results/custom_dqn/seed_<SEED>/video/`
-- `results/sb3_dqn/seed_<SEED>/video/`
+Le pipeline d'entraînement n'enregistre pas de vidéo.
+Pour les vidéos, utilisez uniquement des checkpoints déjà entraînés (section ci-dessous).
 
 Chaque seed exporte aussi les artefacts d'entraînement:
 
 - `train_reward_per_episode.png` (graphe reward/épisode)
 - `train_episode_rewards.json` (dictionnaire `episode_i -> reward`)
+
+Checkpoints:
+
+- checkpoint final toujours sauvegardé:
+  - Custom: `results/custom_dqn/seed_<SEED>/custom_dqn_qnet.pt`
+  - SB3: `results/sb3_dqn/seed_<SEED>/sb3_dqn_model.zip`
+- checkpoints intermédiaires: activés par défaut tous les 100 épisodes
+  - sortie dans `results/<model>/seed_<SEED>/checkpoints/`
+  - noms:
+    - Custom: `custom_dqn_qnet_ep_000050.pt`, `..._ep_000100.pt`, etc.
+    - SB3: `sb3_dqn_model_ep_000050.zip`, `..._ep_000100.zip`, etc.
+- pour changer la fréquence: `--checkpoint-every-episodes <N>`
+- pour désactiver: `--checkpoint-every-episodes 0`
+
+Exemple:
+
+```bash
+./.venv/bin/python main.py --model custom --seed 0 --timesteps 50000 --eval-runs 50 \
+  --checkpoint-every-episodes 50
+
+./.venv/bin/python main.py --model sb3 --seed 0 --timesteps 50000 --eval-runs 50 \
+  --checkpoint-every-episodes 50
+```
 
 ### Générer des vidéos après entraînement (sans retrain)
 

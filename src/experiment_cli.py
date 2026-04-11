@@ -19,7 +19,6 @@ from src.train import train_agent
 from src.utils import (
     export_episode_rewards_dict,
     plot_learning_curves,
-    record_policy_video_from_config,
 )
 
 
@@ -31,10 +30,21 @@ DEFAULT_OUTPUT_DIRS = {
 
 
 class EpisodeRewardCallback(BaseCallback):
-    def __init__(self, log_every_episodes: int = 20):
+    def __init__(
+        self,
+        log_every_episodes: int = 20,
+        checkpoint_every_episodes: int = 0,
+        checkpoint_dir: Path | None = None,
+        checkpoint_prefix: str = "sb3_dqn_model",
+    ):
         super().__init__()
         self.episode_rewards = []
         self.log_every_episodes = log_every_episodes
+        self.checkpoint_every_episodes = checkpoint_every_episodes
+        self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_prefix = checkpoint_prefix
+        if self.checkpoint_dir is not None:
+            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -51,6 +61,16 @@ class EpisodeRewardCallback(BaseCallback):
                         f"[SB3 train] Ep {n}: Last Reward = {reward:.2f} | "
                         f"Mean(last {self.log_every_episodes}) = {recent_mean:.2f}"
                     )
+                if (
+                    self.checkpoint_every_episodes > 0
+                    and self.checkpoint_dir is not None
+                    and n % self.checkpoint_every_episodes == 0
+                ):
+                    checkpoint_path = (
+                        self.checkpoint_dir / f"{self.checkpoint_prefix}_ep_{n:06d}"
+                    )
+                    self.model.save(str(checkpoint_path))
+                    print(f"[checkpoint] Saved: {checkpoint_path}.zip")
         return True
 
 
@@ -71,7 +91,7 @@ def _apply_quick_defaults(args, model: str) -> None:
 
     if model in {"custom", "sb3"}:
         if "--timesteps" not in sys.argv:
-            args.timesteps = 20_000
+            args.timesteps = 5_000
         if "--eval-runs" not in sys.argv:
             args.eval_runs = 10
     elif model == "reinforce":
@@ -81,17 +101,12 @@ def _apply_quick_defaults(args, model: str) -> None:
             args.eval_runs = 10
 
 
-def _evaluate_and_record(
+def _evaluate_policy_only(
     *,
     policy_fn,
-    model_name: str,
     seed: int,
     eval_runs: int,
     no_eval: bool,
-    record_video: bool,
-    run_dir: Path,
-    video_dir_arg: str | None,
-    headless_video: bool,
 ):
     eval_env_factory = lambda: gym.make(SHARED_CORE_ENV_ID, config=SHARED_CORE_CONFIG)
 
@@ -104,26 +119,7 @@ def _evaluate_and_record(
             seed_start=10_000 + seed * 1_000,
         )
 
-    video_reward = None
-    video_error = None
-    if record_video:
-        try:
-            video_dir = Path(video_dir_arg) if video_dir_arg else run_dir / "video"
-            video_dir.mkdir(parents=True, exist_ok=True)
-            video_reward = record_policy_video_from_config(
-                policy_fn=policy_fn,
-                env_id=SHARED_CORE_ENV_ID,
-                env_config=SHARED_CORE_CONFIG,
-                save_dir=str(video_dir),
-                name_prefix=f"{model_name}_seed_{seed}",
-                seed=20_000 + seed * 1_000,
-                headless=headless_video,
-            )
-        except Exception as exc:
-            video_error = str(exc)
-            print(f"{model_name} video recording failed: {video_error}")
-
-    return eval_rewards, video_reward, video_error
+    return eval_rewards
 
 
 def _save_training_episode_artifacts(run_dir: Path, train_rewards: list[float]) -> None:
@@ -135,6 +131,27 @@ def _save_training_episode_artifacts(run_dir: Path, train_rewards: list[float]) 
         save_dir=str(run_dir),
         filename="train_reward_per_episode.png",
     )
+
+
+def _make_qnet_checkpoint_callback(
+    *,
+    agent,
+    checkpoint_dir: Path,
+    checkpoint_prefix: str,
+    checkpoint_every_episodes: int,
+):
+    if checkpoint_every_episodes <= 0:
+        return None
+
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    def _on_episode_end(episode_idx: int, _episode_reward: float) -> None:
+        if episode_idx % checkpoint_every_episodes == 0:
+            checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_ep_{episode_idx:06d}.pt"
+            torch.save(agent.q_net.state_dict(), checkpoint_path)
+            print(f"[checkpoint] Saved: {checkpoint_path}")
+
+    return _on_episode_end
 
 
 def _run_custom(args) -> None:
@@ -159,12 +176,19 @@ def _run_custom(args) -> None:
         observation_space=observation_space,
         **dqn_cfg,
     )
+    on_episode_end = _make_qnet_checkpoint_callback(
+        agent=agent,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_prefix="custom_dqn_qnet",
+        checkpoint_every_episodes=args.checkpoint_every_episodes,
+    )
 
     losses, train_rewards = train_agent(
         env=train_env,
         agent=agent,
         total_timesteps=args.timesteps,
         eval_every=args.log_train_every,
+        on_episode_end=on_episode_end,
     )
 
     _save_training_episode_artifacts(run_dir=run_dir, train_rewards=train_rewards)
@@ -178,16 +202,11 @@ def _run_custom(args) -> None:
         )
 
     eval_policy_fn = lambda state: agent.get_action(state, epsilon=0.0)
-    eval_rewards, video_reward, video_error = _evaluate_and_record(
+    eval_rewards = _evaluate_policy_only(
         policy_fn=eval_policy_fn,
-        model_name="custom_dqn",
         seed=args.seed,
         eval_runs=args.eval_runs,
         no_eval=args.no_eval,
-        record_video=args.record_video,
-        run_dir=run_dir,
-        video_dir_arg=args.video_dir,
-        headless_video=args.headless_video,
     )
 
     metrics = {
@@ -198,9 +217,8 @@ def _run_custom(args) -> None:
         "train_completed_episodes": len(train_rewards),
         "mean_reward": float(np.mean(eval_rewards)) if eval_rewards else None,
         "std_reward": float(np.std(eval_rewards)) if eval_rewards else None,
-        "video_reward": float(video_reward) if video_reward is not None else None,
-        "video_error": video_error,
         "quick_mode": bool(args.quick),
+        "checkpoint_every_episodes": int(args.checkpoint_every_episodes),
     }
 
     with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
@@ -218,8 +236,6 @@ def _run_custom(args) -> None:
         )
     else:
         print(f"Custom DQN | seed={args.seed} | evaluation skipped")
-    if video_reward is not None:
-        print(f"Custom DQN video reward (seed={args.seed}): {video_reward:.2f}")
     print(f"Metrics saved to: {run_dir / 'metrics.json'}")
 
     train_env.close()
@@ -257,7 +273,12 @@ def _run_sb3(args) -> None:
         verbose=1,
     )
 
-    reward_callback = EpisodeRewardCallback(log_every_episodes=args.log_train_every)
+    reward_callback = EpisodeRewardCallback(
+        log_every_episodes=args.log_train_every,
+        checkpoint_every_episodes=args.checkpoint_every_episodes,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_prefix="sb3_dqn_model",
+    )
     model.learn(
         total_timesteps=args.timesteps,
         progress_bar=args.progress_bar,
@@ -270,16 +291,11 @@ def _run_sb3(args) -> None:
     _save_training_episode_artifacts(run_dir=run_dir, train_rewards=train_rewards)
 
     eval_policy_fn = lambda state: model.predict(state, deterministic=True)[0]
-    eval_rewards, video_reward, video_error = _evaluate_and_record(
+    eval_rewards = _evaluate_policy_only(
         policy_fn=eval_policy_fn,
-        model_name="sb3_dqn",
         seed=args.seed,
         eval_runs=args.eval_runs,
         no_eval=args.no_eval,
-        record_video=args.record_video,
-        run_dir=run_dir,
-        video_dir_arg=args.video_dir,
-        headless_video=args.headless_video,
     )
 
     metrics = {
@@ -290,9 +306,8 @@ def _run_sb3(args) -> None:
         "train_completed_episodes": len(train_rewards),
         "mean_reward": float(np.mean(eval_rewards)) if eval_rewards else None,
         "std_reward": float(np.std(eval_rewards)) if eval_rewards else None,
-        "video_reward": float(video_reward) if video_reward is not None else None,
-        "video_error": video_error,
         "quick_mode": bool(args.quick),
+        "checkpoint_every_episodes": int(args.checkpoint_every_episodes),
     }
 
     with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
@@ -308,8 +323,6 @@ def _run_sb3(args) -> None:
         )
     else:
         print(f"SB3 DQN | seed={args.seed} | evaluation skipped")
-    if video_reward is not None:
-        print(f"SB3 DQN video reward (seed={args.seed}): {video_reward:.2f}")
     print(f"Model saved to: {model_path}.zip")
     print(f"Metrics saved to: {run_dir / 'metrics.json'}")
 
@@ -337,12 +350,19 @@ def _run_reinforce(args) -> None:
         observation_space=observation_space,
         **dqn_cfg,
     )
+    on_episode_end = _make_qnet_checkpoint_callback(
+        agent=agent,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_prefix="reinforce_qnet",
+        checkpoint_every_episodes=args.checkpoint_every_episodes,
+    )
 
     losses, train_rewards = train_agent(
         env=train_env,
         agent=agent,
         n_episodes=args.episodes,
         eval_every=args.log_train_every,
+        on_episode_end=on_episode_end,
     )
 
     _save_training_episode_artifacts(run_dir=run_dir, train_rewards=train_rewards)
@@ -356,16 +376,11 @@ def _run_reinforce(args) -> None:
         )
 
     eval_policy_fn = lambda state: agent.get_action(state, epsilon=0.0)
-    eval_rewards, video_reward, video_error = _evaluate_and_record(
+    eval_rewards = _evaluate_policy_only(
         policy_fn=eval_policy_fn,
-        model_name="reinforce",
         seed=args.seed,
         eval_runs=args.eval_runs,
         no_eval=args.no_eval,
-        record_video=args.record_video,
-        run_dir=run_dir,
-        video_dir_arg=args.video_dir,
-        headless_video=args.headless_video,
     )
 
     metrics = {
@@ -376,9 +391,8 @@ def _run_reinforce(args) -> None:
         "train_completed_episodes": len(train_rewards),
         "mean_reward": float(np.mean(eval_rewards)) if eval_rewards else None,
         "std_reward": float(np.std(eval_rewards)) if eval_rewards else None,
-        "video_reward": float(video_reward) if video_reward is not None else None,
-        "video_error": video_error,
         "quick_mode": bool(args.quick),
+        "checkpoint_every_episodes": int(args.checkpoint_every_episodes),
     }
 
     with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
@@ -396,8 +410,6 @@ def _run_reinforce(args) -> None:
         )
     else:
         print(f"REINFORCE | seed={args.seed} | evaluation skipped")
-    if video_reward is not None:
-        print(f"REINFORCE video reward (seed={args.seed}): {video_reward:.2f}")
     print(f"Metrics saved to: {run_dir / 'metrics.json'}")
 
     train_env.close()
@@ -430,13 +442,6 @@ def _build_parser(model_override: str | None = None) -> argparse.ArgumentParser:
         help="Root output directory (default depends on model).",
     )
     parser.add_argument("--quick", action="store_true", help="Use quick default budget.")
-    parser.add_argument("--record-video", action="store_true", help="Record one rollout video.")
-    parser.add_argument(
-        "--video-dir",
-        type=str,
-        default=None,
-        help="Video directory (default: <output-dir>/seed_<seed>/video).",
-    )
     parser.add_argument("--no-eval", action="store_true", help="Skip evaluation.")
     parser.add_argument(
         "--progress-bar",
@@ -451,20 +456,14 @@ def _build_parser(model_override: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-train-every",
         type=int,
-        default=20,
+        default=50,
         help="Print training reward statistics every N completed episodes.",
     )
     parser.add_argument(
-        "--headless-video",
-        action="store_true",
-        default=True,
-        help="Use headless/offscreen rendering for video recording.",
-    )
-    parser.add_argument(
-        "--no-headless-video",
-        action="store_false",
-        dest="headless_video",
-        help="Disable headless rendering (better visuals locally, can fail on servers).",
+        "--checkpoint-every-episodes",
+        type=int,
+        default=100,
+        help="Save intermediate checkpoints every N completed episodes (0 disables).",
     )
     return parser
 

@@ -2,7 +2,14 @@ from tqdm import tqdm
 import numpy as np
 
 
-def train_agent(env, agent, n_episodes=None, total_timesteps=None, eval_every=20):
+def train_agent(
+    env,
+    agent,
+    n_episodes=None,
+    total_timesteps=None,
+    eval_every=50,
+    on_episode_end=None,
+):
     if (n_episodes is None) == (total_timesteps is None):
         raise ValueError("Specify exactly one of `n_episodes` or `total_timesteps`.")
 
@@ -51,9 +58,12 @@ def train_agent(env, agent, n_episodes=None, total_timesteps=None, eval_every=20
             dones = terminateds | truncateds
             for i, done in enumerate(dones):
                 if done:
-                    all_rewards.append(float(episode_rewards[i]))
+                    episode_reward = float(episode_rewards[i])
+                    all_rewards.append(episode_reward)
                     episode_rewards[i] = 0.0
                     completed_episodes += 1
+                    if on_episode_end is not None:
+                        on_episode_end(completed_episodes, episode_reward)
                     if n_episodes is not None:
                         pbar.update(1)
                     if eval_every > 0 and completed_episodes % eval_every == 0:
