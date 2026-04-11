@@ -18,6 +18,7 @@ from src.evaluate import evaluate_policy
 from src.train import train_agent
 from src.utils import (
     export_episode_rewards_dict,
+    export_train_losses_dict,
     plot_learning_curves,
 )
 
@@ -36,6 +37,9 @@ class EpisodeRewardCallback(BaseCallback):
         checkpoint_every_episodes: int = 0,
         checkpoint_dir: Path | None = None,
         checkpoint_prefix: str = "sb3_dqn_model",
+        save_json_every_episodes: int = 0,
+        run_dir: Path | None = None,
+        train_losses: list[float] | None = None,
     ):
         super().__init__()
         self.episode_rewards = []
@@ -43,6 +47,9 @@ class EpisodeRewardCallback(BaseCallback):
         self.checkpoint_every_episodes = checkpoint_every_episodes
         self.checkpoint_dir = checkpoint_dir
         self.checkpoint_prefix = checkpoint_prefix
+        self.save_json_every_episodes = save_json_every_episodes
+        self.run_dir = run_dir
+        self.train_losses = train_losses
         if self.checkpoint_dir is not None:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -71,7 +78,35 @@ class EpisodeRewardCallback(BaseCallback):
                     )
                     self.model.save(str(checkpoint_path))
                     print(f"[checkpoint] Saved: {checkpoint_path}.zip")
+                if (
+                    self.save_json_every_episodes > 0
+                    and self.run_dir is not None
+                    and n % self.save_json_every_episodes == 0
+                ):
+                    _save_training_json_artifacts(
+                        run_dir=self.run_dir,
+                        train_rewards=self.episode_rewards,
+                        train_losses=self.train_losses,
+                    )
+                    print(
+                        f"[train-json] Saved training JSON snapshots at episode {n}: "
+                        f"{self.run_dir / 'train_episode_rewards.json'}"
+                    )
         return True
+
+
+def _attach_sb3_loss_collector(model: SB3DQN, loss_store: list[float]) -> None:
+    original_train = model.train
+
+    def _train_with_capture(*args, **kwargs):
+        result = original_train(*args, **kwargs)
+        logger_values = getattr(model.logger, "name_to_value", {})
+        maybe_loss = logger_values.get("train/loss")
+        if maybe_loss is not None and np.isfinite(maybe_loss):
+            loss_store.append(float(maybe_loss))
+        return result
+
+    model.train = _train_with_capture
 
 
 def seed_everything(seed: int) -> None:
@@ -122,14 +157,35 @@ def _evaluate_policy_only(
     return eval_rewards
 
 
-def _save_training_episode_artifacts(run_dir: Path, train_rewards: list[float]) -> None:
-    np.save(run_dir / "train_rewards.npy", np.array(train_rewards, dtype=np.float32))
+def _save_training_json_artifacts(
+    *,
+    run_dir: Path,
+    train_rewards: list[float],
+    train_losses: list[float] | None,
+) -> None:
     export_episode_rewards_dict(train_rewards, str(run_dir / "train_episode_rewards.json"))
+    safe_losses = [] if train_losses is None else train_losses
+    export_train_losses_dict(safe_losses, str(run_dir / "train_losses.json"))
+
+
+def _save_training_episode_artifacts(
+    run_dir: Path,
+    train_rewards: list[float],
+    train_losses: list[float] | None,
+) -> None:
+    np.save(run_dir / "train_rewards.npy", np.array(train_rewards, dtype=np.float32))
+    safe_losses = [] if train_losses is None else train_losses
+    np.save(run_dir / "train_losses.npy", np.array(safe_losses, dtype=np.float32))
+    _save_training_json_artifacts(
+        run_dir=run_dir,
+        train_rewards=train_rewards,
+        train_losses=train_losses,
+    )
     plot_learning_curves(
-        losses=None,
+        losses=safe_losses,
         rewards=train_rewards,
         save_dir=str(run_dir),
-        filename="train_reward_per_episode.png",
+        filename="training_curves.png",
     )
 
 
@@ -150,6 +206,43 @@ def _make_qnet_checkpoint_callback(
             checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_ep_{episode_idx:06d}.pt"
             torch.save(agent.q_net.state_dict(), checkpoint_path)
             print(f"[checkpoint] Saved: {checkpoint_path}")
+
+    return _on_episode_end
+
+
+def _make_periodic_json_snapshot_callback(
+    *,
+    run_dir: Path,
+    train_rewards: list[float],
+    train_losses: list[float] | None,
+    save_json_every_episodes: int,
+):
+    if save_json_every_episodes <= 0:
+        return None
+
+    def _on_episode_end(episode_idx: int, _episode_reward: float) -> None:
+        if episode_idx % save_json_every_episodes == 0:
+            _save_training_json_artifacts(
+                run_dir=run_dir,
+                train_rewards=train_rewards,
+                train_losses=train_losses,
+            )
+            print(
+                f"[train-json] Saved training JSON snapshots at episode {episode_idx}: "
+                f"{run_dir / 'train_episode_rewards.json'}"
+            )
+
+    return _on_episode_end
+
+
+def _compose_episode_end_callbacks(*callbacks):
+    active_callbacks = [cb for cb in callbacks if cb is not None]
+    if not active_callbacks:
+        return None
+
+    def _on_episode_end(episode_idx: int, episode_reward: float) -> None:
+        for cb in active_callbacks:
+            cb(episode_idx, episode_reward)
 
     return _on_episode_end
 
@@ -176,11 +269,24 @@ def _run_custom(args) -> None:
         observation_space=observation_space,
         **dqn_cfg,
     )
-    on_episode_end = _make_qnet_checkpoint_callback(
+    train_losses: list[float] = []
+    train_rewards: list[float] = []
+
+    checkpoint_callback = _make_qnet_checkpoint_callback(
         agent=agent,
         checkpoint_dir=run_dir / "checkpoints",
         checkpoint_prefix="custom_dqn_qnet",
         checkpoint_every_episodes=args.checkpoint_every_episodes,
+    )
+    train_json_callback = _make_periodic_json_snapshot_callback(
+        run_dir=run_dir,
+        train_rewards=train_rewards,
+        train_losses=train_losses,
+        save_json_every_episodes=args.save_json_every_episodes,
+    )
+    on_episode_end = _compose_episode_end_callbacks(
+        checkpoint_callback,
+        train_json_callback,
     )
 
     losses, train_rewards = train_agent(
@@ -189,17 +295,15 @@ def _run_custom(args) -> None:
         total_timesteps=args.timesteps,
         eval_every=args.log_train_every,
         on_episode_end=on_episode_end,
+        all_losses=train_losses,
+        all_rewards=train_rewards,
     )
 
-    _save_training_episode_artifacts(run_dir=run_dir, train_rewards=train_rewards)
-
-    if args.plot_curves:
-        plot_learning_curves(
-            losses=losses,
-            rewards=train_rewards,
-            save_dir=str(run_dir),
-            filename="learning_performance.png",
-        )
+    _save_training_episode_artifacts(
+        run_dir=run_dir,
+        train_rewards=train_rewards,
+        train_losses=losses,
+    )
 
     eval_policy_fn = lambda state: agent.get_action(state, epsilon=0.0)
     eval_rewards = _evaluate_policy_only(
@@ -219,6 +323,7 @@ def _run_custom(args) -> None:
         "std_reward": float(np.std(eval_rewards)) if eval_rewards else None,
         "quick_mode": bool(args.quick),
         "checkpoint_every_episodes": int(args.checkpoint_every_episodes),
+        "save_json_every_episodes": int(args.save_json_every_episodes),
     }
 
     with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
@@ -226,7 +331,6 @@ def _run_custom(args) -> None:
 
     if eval_rewards:
         np.save(run_dir / "eval_rewards.npy", np.array(eval_rewards, dtype=np.float32))
-    np.save(run_dir / "train_losses.npy", np.array(losses, dtype=np.float32))
     torch.save(agent.q_net.state_dict(), run_dir / "custom_dqn_qnet.pt")
 
     if eval_rewards:
@@ -259,12 +363,13 @@ def _run_sb3(args) -> None:
         "MlpPolicy",
         vec_env,
         seed=args.seed,
+        policy_kwargs={"net_arch": [256, 256]},
         learning_rate=TRAINING_CONFIG["learning_rate"],
         batch_size=TRAINING_CONFIG["batch_size"],
         gamma=TRAINING_CONFIG["gamma"],
         buffer_size=TRAINING_CONFIG["buffer_capacity"],
         target_update_interval=TRAINING_CONFIG["update_target_every"],
-        learning_starts=1_000,
+        learning_starts=TRAINING_CONFIG["batch_size"],
         train_freq=4,
         gradient_steps=1,
         exploration_initial_eps=TRAINING_CONFIG["epsilon_start"],
@@ -272,12 +377,17 @@ def _run_sb3(args) -> None:
         exploration_fraction=0.3,
         verbose=1,
     )
+    train_losses: list[float] = []
+    _attach_sb3_loss_collector(model, train_losses)
 
     reward_callback = EpisodeRewardCallback(
         log_every_episodes=args.log_train_every,
         checkpoint_every_episodes=args.checkpoint_every_episodes,
         checkpoint_dir=run_dir / "checkpoints",
         checkpoint_prefix="sb3_dqn_model",
+        save_json_every_episodes=args.save_json_every_episodes,
+        run_dir=run_dir,
+        train_losses=train_losses,
     )
     model.learn(
         total_timesteps=args.timesteps,
@@ -288,7 +398,11 @@ def _run_sb3(args) -> None:
     model.save(str(model_path))
     train_rewards = reward_callback.episode_rewards
 
-    _save_training_episode_artifacts(run_dir=run_dir, train_rewards=train_rewards)
+    _save_training_episode_artifacts(
+        run_dir=run_dir,
+        train_rewards=train_rewards,
+        train_losses=train_losses,
+    )
 
     eval_policy_fn = lambda state: model.predict(state, deterministic=True)[0]
     eval_rewards = _evaluate_policy_only(
@@ -308,6 +422,7 @@ def _run_sb3(args) -> None:
         "std_reward": float(np.std(eval_rewards)) if eval_rewards else None,
         "quick_mode": bool(args.quick),
         "checkpoint_every_episodes": int(args.checkpoint_every_episodes),
+        "save_json_every_episodes": int(args.save_json_every_episodes),
     }
 
     with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
@@ -350,11 +465,24 @@ def _run_reinforce(args) -> None:
         observation_space=observation_space,
         **dqn_cfg,
     )
-    on_episode_end = _make_qnet_checkpoint_callback(
+    train_losses: list[float] = []
+    train_rewards: list[float] = []
+
+    checkpoint_callback = _make_qnet_checkpoint_callback(
         agent=agent,
         checkpoint_dir=run_dir / "checkpoints",
         checkpoint_prefix="reinforce_qnet",
         checkpoint_every_episodes=args.checkpoint_every_episodes,
+    )
+    train_json_callback = _make_periodic_json_snapshot_callback(
+        run_dir=run_dir,
+        train_rewards=train_rewards,
+        train_losses=train_losses,
+        save_json_every_episodes=args.save_json_every_episodes,
+    )
+    on_episode_end = _compose_episode_end_callbacks(
+        checkpoint_callback,
+        train_json_callback,
     )
 
     losses, train_rewards = train_agent(
@@ -363,17 +491,15 @@ def _run_reinforce(args) -> None:
         n_episodes=args.episodes,
         eval_every=args.log_train_every,
         on_episode_end=on_episode_end,
+        all_losses=train_losses,
+        all_rewards=train_rewards,
     )
 
-    _save_training_episode_artifacts(run_dir=run_dir, train_rewards=train_rewards)
-
-    if args.plot_curves:
-        plot_learning_curves(
-            losses=losses,
-            rewards=train_rewards,
-            save_dir=str(run_dir),
-            filename="learning_performance.png",
-        )
+    _save_training_episode_artifacts(
+        run_dir=run_dir,
+        train_rewards=train_rewards,
+        train_losses=losses,
+    )
 
     eval_policy_fn = lambda state: agent.get_action(state, epsilon=0.0)
     eval_rewards = _evaluate_policy_only(
@@ -393,6 +519,7 @@ def _run_reinforce(args) -> None:
         "std_reward": float(np.std(eval_rewards)) if eval_rewards else None,
         "quick_mode": bool(args.quick),
         "checkpoint_every_episodes": int(args.checkpoint_every_episodes),
+        "save_json_every_episodes": int(args.save_json_every_episodes),
     }
 
     with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
@@ -400,7 +527,6 @@ def _run_reinforce(args) -> None:
 
     if eval_rewards:
         np.save(run_dir / "eval_rewards.npy", np.array(eval_rewards, dtype=np.float32))
-    np.save(run_dir / "train_losses.npy", np.array(losses, dtype=np.float32))
     torch.save(agent.q_net.state_dict(), run_dir / "reinforce_qnet.pt")
 
     if eval_rewards:
@@ -449,11 +575,6 @@ def _build_parser(model_override: str | None = None) -> argparse.ArgumentParser:
         help="Enable SB3 progress bar (requires rich).",
     )
     parser.add_argument(
-        "--plot-curves",
-        action="store_true",
-        help="Save training curves for custom/reinforce.",
-    )
-    parser.add_argument(
         "--log-train-every",
         type=int,
         default=50,
@@ -464,6 +585,12 @@ def _build_parser(model_override: str | None = None) -> argparse.ArgumentParser:
         type=int,
         default=100,
         help="Save intermediate checkpoints every N completed episodes (0 disables).",
+    )
+    parser.add_argument(
+        "--save-json-every-episodes",
+        type=int,
+        default=100,
+        help="Update training JSON snapshots every N completed episodes (0 disables).",
     )
     return parser
 

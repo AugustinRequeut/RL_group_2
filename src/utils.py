@@ -4,30 +4,34 @@ import gymnasium as gym
 import json
 from gymnasium.wrappers import RecordVideo
 
-def plot_learning_curves(losses, rewards, save_dir="results", filename="learning_performance.png"):
+def plot_learning_curves(losses, rewards, save_dir="results", filename="training_curves.png"):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
     if losses is None or len(losses) == 0:
-        fig, ax = plt.subplots(1, 1, figsize=(10, 4))
-        ax.plot(rewards, color="blue")
-        ax.set_title("Rewards per Episode")
-        ax.set_xlabel("Episodes")
-        ax.set_ylabel("Reward")
-        ax.grid(True)
+        ax1.plot([], [], color="red")
+        ax1.text(
+            0.5,
+            0.5,
+            "No training losses recorded",
+            transform=ax1.transAxes,
+            ha="center",
+            va="center",
+            fontsize=10,
+        )
     else:
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-
         ax1.plot(losses, color="red")
-        ax1.set_title("Training Loss")
-        ax1.set_ylabel("Loss")
-        ax1.grid(True)
+    ax1.set_title("Training Loss")
+    ax1.set_ylabel("Loss")
+    ax1.grid(True)
 
-        ax2.plot(rewards, color="blue")
-        ax2.set_title("Rewards per Episode")
-        ax2.set_xlabel("Episodes")
-        ax2.set_ylabel("Reward")
-        ax2.grid(True)
+    ax2.plot(rewards, color="blue")
+    ax2.set_title("Rewards per Episode")
+    ax2.set_xlabel("Episodes")
+    ax2.set_ylabel("Reward")
+    ax2.grid(True)
 
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, filename))
@@ -53,6 +57,13 @@ def export_episode_rewards_dict(rewards, save_path):
     episode_rewards = {f"episode_{i+1}": float(r) for i, r in enumerate(rewards)}
     with open(save_path, "w", encoding="utf-8") as f:
         json.dump(episode_rewards, f, indent=2)
+
+
+def export_train_losses_dict(losses, save_path):
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    train_losses = {f"update_{i+1}": float(v) for i, v in enumerate(losses)}
+    with open(save_path, "w", encoding="utf-8") as f:
+        json.dump(train_losses, f, indent=2)
 
 def record_final_agent_video(agent, render_env, save_dir="results/video"):
     def _policy_fn(state):

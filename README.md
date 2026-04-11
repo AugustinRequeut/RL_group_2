@@ -77,8 +77,15 @@ Pour les vidéos, utilisez uniquement des checkpoints déjà entraînés (sectio
 
 Chaque seed exporte aussi les artefacts d'entraînement:
 
-- `train_reward_per_episode.png` (graphe reward/épisode)
+- `training_curves.png` (graphe reward + loss si disponible)
 - `train_episode_rewards.json` (dictionnaire `episode_i -> reward`)
+- `train_rewards.npy` (liste brute des rewards)
+- `train_losses.json` (dictionnaire `update_i -> loss`)
+- `train_losses.npy` (liste brute des losses)
+
+Note: sur SB3, les losses peuvent être vides sur des runs très courts (pas assez de steps avant le début d'apprentissage, ici `learning_starts=batch_size=128`).
+Note: les JSON d'entraînement (`train_episode_rewards.json`, `train_losses.json`) sont mis à jour
+pendant le training tous les 100 épisodes par défaut.
 
 Checkpoints:
 
@@ -88,10 +95,13 @@ Checkpoints:
 - checkpoints intermédiaires: activés par défaut tous les 100 épisodes
   - sortie dans `results/<model>/seed_<SEED>/checkpoints/`
   - noms:
-    - Custom: `custom_dqn_qnet_ep_000050.pt`, `..._ep_000100.pt`, etc.
-    - SB3: `sb3_dqn_model_ep_000050.zip`, `..._ep_000100.zip`, etc.
+    - Custom: `custom_dqn_qnet_ep_000100.pt`, `..._ep_000200.pt`, etc.
+    - SB3: `sb3_dqn_model_ep_000100.zip`, `..._ep_000200.zip`, etc.
 - pour changer la fréquence: `--checkpoint-every-episodes <N>`
 - pour désactiver: `--checkpoint-every-episodes 0`
+- snapshots JSON pendant training:
+  - fréquence: `--save-json-every-episodes <N>` (défaut: `100`)
+  - désactiver: `--save-json-every-episodes 0`
 
 Exemple:
 
