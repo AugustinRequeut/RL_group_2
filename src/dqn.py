@@ -54,6 +54,168 @@ class Net(nn.Module):
         return self.net(x.float())
 
 
+def _masked_pool(x, mask, mode="mean"):
+    """
+    x: (B, N, D)
+    mask: (B, N) with 1 for valid entities, 0 for padded/missing entities.
+    """
+    mask = mask.float().unsqueeze(-1)  # (B, N, 1)
+    if mode == "mean":
+        denom = mask.sum(dim=1).clamp_min(1.0)  # (B, 1)
+        return (x * mask).sum(dim=1) / denom
+
+    if mode == "max":
+        neg_inf = torch.finfo(x.dtype).min
+        masked = x.masked_fill(mask == 0, neg_inf)
+        pooled = masked.max(dim=1).values
+        # If no valid entity, max is -inf: replace by zeros.
+        return torch.where(torch.isfinite(pooled), pooled, torch.zeros_like(pooled))
+
+    raise ValueError(f"Unknown pooling mode '{mode}'. Use 'mean' or 'max'.")
+
+
+class SharedPoolNet(nn.Module):
+    """
+    Architecture 1:
+    - shared MLP on each non-ego vehicle: phi(5 -> 128 -> 128)
+    - pooling over non-ego embeddings (mean or max)
+    - concat with ego features
+    - output head: (5 + 128) -> 128 -> 128 -> n_actions
+    """
+
+    def __init__(self, obs_shape, n_actions, pooling="mean"):
+        super().__init__()
+        if len(obs_shape) != 2:
+            raise ValueError(
+                "SharedPoolNet expects obs shape (n_vehicles, n_features), "
+                f"got {obs_shape}"
+            )
+        n_vehicles, n_features = int(obs_shape[0]), int(obs_shape[1])
+        if n_vehicles < 2:
+            raise ValueError("SharedPoolNet needs at least 2 vehicles (ego + non-ego).")
+
+        self.n_vehicles = n_vehicles
+        self.n_features = n_features
+        self.pooling = pooling
+        self.embed_dim = 128
+
+        self.phi = nn.Sequential(
+            nn.Linear(n_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+        )
+
+        self.head = nn.Sequential(
+            nn.Linear(n_features + self.embed_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, n_actions),
+        )
+
+    def _ensure_batched(self, x):
+        if x.dim() == 2:
+            x = x.unsqueeze(0)
+        if x.dim() != 3:
+            raise ValueError(f"Expected 2D or 3D tensor, got shape {tuple(x.shape)}")
+        return x
+
+    def forward(self, x):
+        x = self._ensure_batched(x.float())
+        ego = x[:, 0, :]  # (B, F)
+        others = x[:, 1:, :]  # (B, N-1, F)
+
+        bsz, n_other, _ = others.shape
+        flat = others.reshape(-1, self.n_features)
+        emb = self.phi(flat).view(bsz, n_other, self.embed_dim)
+
+        # "presence" is feature index 0 in this environment config.
+        presence_mask = others[:, :, 0] > 0
+        pooled = _masked_pool(emb, presence_mask, mode=self.pooling)
+
+        fused = torch.cat([ego, pooled], dim=1)
+        return self.head(fused)
+
+
+class PairwiseEgoNet(nn.Module):
+    """
+    Architecture 2:
+    - shared MLP on each non-ego vehicle: phi(5 -> 128 -> 128)
+    - for each non-ego i: concat(ego, phi_i)
+    - shared pairwise MLP psi: (5 + 128) -> 128 -> 128
+    - pooling over pairwise embeddings (mean or max)
+    - output head: (5 + 128) -> 128 -> 128 -> n_actions
+    """
+
+    def __init__(self, obs_shape, n_actions, pooling="mean"):
+        super().__init__()
+        if len(obs_shape) != 2:
+            raise ValueError(
+                "PairwiseEgoNet expects obs shape (n_vehicles, n_features), "
+                f"got {obs_shape}"
+            )
+        n_vehicles, n_features = int(obs_shape[0]), int(obs_shape[1])
+        if n_vehicles < 2:
+            raise ValueError("PairwiseEgoNet needs at least 2 vehicles (ego + non-ego).")
+
+        self.n_vehicles = n_vehicles
+        self.n_features = n_features
+        self.pooling = pooling
+        self.embed_dim = 128
+        pair_in = n_features + self.embed_dim
+
+        self.phi = nn.Sequential(
+            nn.Linear(n_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+        )
+
+        self.psi = nn.Sequential(
+            nn.Linear(pair_in, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+        )
+
+        self.head = nn.Sequential(
+            nn.Linear(pair_in, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, n_actions),
+        )
+
+    def _ensure_batched(self, x):
+        if x.dim() == 2:
+            x = x.unsqueeze(0)
+        if x.dim() != 3:
+            raise ValueError(f"Expected 2D or 3D tensor, got shape {tuple(x.shape)}")
+        return x
+
+    def forward(self, x):
+        x = self._ensure_batched(x.float())
+        ego = x[:, 0, :]  # (B, F)
+        others = x[:, 1:, :]  # (B, N-1, F)
+
+        bsz, n_other, _ = others.shape
+        flat = others.reshape(-1, self.n_features)
+        other_emb = self.phi(flat).view(bsz, n_other, self.embed_dim)
+
+        ego_tiled = ego.unsqueeze(1).expand(-1, n_other, -1)
+        pair_input = torch.cat([ego_tiled, other_emb], dim=-1)
+        pair_emb = self.psi(pair_input.reshape(-1, self.n_features + self.embed_dim)).view(
+            bsz, n_other, self.embed_dim
+        )
+
+        presence_mask = others[:, :, 0] > 0
+        pooled = _masked_pool(pair_emb, presence_mask, mode=self.pooling)
+
+        fused = torch.cat([ego, pooled], dim=1)
+        return self.head(fused)
+
+
 class DQN:
     def __init__(
         self,
@@ -67,6 +229,8 @@ class DQN:
         decrease_epsilon_factor,
         epsilon_min,
         learning_rate,
+        network_type="flat_mlp",
+        pooling="mean",
     ):
         self.action_space = action_space
         self.observation_space = observation_space
@@ -83,6 +247,8 @@ class DQN:
         self.epsilon_min = epsilon_min
 
         self.learning_rate = learning_rate
+        self.network_type = network_type
+        self.pooling = pooling
 
         self.reset()
 
@@ -91,7 +257,7 @@ class DQN:
         self.buffer.push(state, action, reward, terminated, next_state)
 
         if len(self.buffer) < self.batch_size:
-            return np.inf
+            return None
 
         # get batch
         transitions = self.buffer.sample(self.batch_size)
@@ -164,8 +330,36 @@ class DQN:
         n_actions = self.action_space.n
 
         self.buffer = ReplayBuffer(self.buffer_capacity)
-        self.q_net = Net(obs_shape, hidden_size, n_actions)
-        self.target_net = Net(obs_shape, hidden_size, n_actions)
+        if self.network_type == "flat_mlp":
+            self.q_net = Net(obs_shape, hidden_size, n_actions)
+            self.target_net = Net(obs_shape, hidden_size, n_actions)
+        elif self.network_type == "shared_pool":
+            self.q_net = SharedPoolNet(
+                obs_shape=obs_shape,
+                n_actions=n_actions,
+                pooling=self.pooling,
+            )
+            self.target_net = SharedPoolNet(
+                obs_shape=obs_shape,
+                n_actions=n_actions,
+                pooling=self.pooling,
+            )
+        elif self.network_type == "pairwise_ego":
+            self.q_net = PairwiseEgoNet(
+                obs_shape=obs_shape,
+                n_actions=n_actions,
+                pooling=self.pooling,
+            )
+            self.target_net = PairwiseEgoNet(
+                obs_shape=obs_shape,
+                n_actions=n_actions,
+                pooling=self.pooling,
+            )
+        else:
+            raise ValueError(
+                f"Unknown network_type='{self.network_type}'. "
+                "Use one of: flat_mlp, shared_pool, pairwise_ego."
+            )
 
         self.loss_function = nn.MSELoss()
         self.optimizer = optim.Adam(
@@ -189,6 +383,8 @@ class REINFORCEBaseline(DQN):
         decrease_epsilon_factor,
         epsilon_min,
         learning_rate,
+        network_type="flat_mlp",
+        pooling="mean",
     ):
         super().__init__(action_space,
         observation_space,
@@ -199,7 +395,9 @@ class REINFORCEBaseline(DQN):
         epsilon_start,
         decrease_epsilon_factor,
         epsilon_min,
-        learning_rate)
+        learning_rate,
+        network_type,
+        pooling)
         
         self.current_episode = []
 

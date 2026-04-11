@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 
 import gymnasium as gym
@@ -11,6 +12,29 @@ from src.dqn import DQN
 from src.utils import record_policy_video_from_config
 
 
+def _infer_run_dir_from_checkpoint(checkpoint_path: Path) -> Path:
+    # Final custom checkpoint: <run_dir>/custom_dqn_qnet.pt
+    # Intermediate custom checkpoint: <run_dir>/checkpoints/custom_dqn_qnet_ep_XXXXXX.pt
+    if checkpoint_path.parent.name == "checkpoints":
+        return checkpoint_path.parent.parent
+    return checkpoint_path.parent
+
+
+def _load_custom_model_config(checkpoint_path: Path) -> dict:
+    run_dir = _infer_run_dir_from_checkpoint(checkpoint_path)
+    metrics_path = run_dir / "metrics.json"
+    if not metrics_path.exists():
+        return {"network_type": "flat_mlp", "pooling": "mean"}
+
+    with open(metrics_path, "r", encoding="utf-8") as f:
+        metrics = json.load(f)
+
+    return {
+        "network_type": metrics.get("custom_network", "flat_mlp"),
+        "pooling": metrics.get("pooling", "mean"),
+    }
+
+
 def load_custom_agent(checkpoint_path: Path) -> DQN:
     env = gym.make_vec(
         SHARED_CORE_ENV_ID,
@@ -20,6 +44,7 @@ def load_custom_agent(checkpoint_path: Path) -> DQN:
     action_space = env.single_action_space
     observation_space = env.single_observation_space
     dqn_cfg = {k: v for k, v in TRAINING_CONFIG.items() if k != "num_envs"}
+    dqn_cfg.update(_load_custom_model_config(checkpoint_path))
     agent = DQN(action_space=action_space, observation_space=observation_space, **dqn_cfg)
 
     state_dict = torch.load(checkpoint_path, map_location="cpu")

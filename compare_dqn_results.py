@@ -27,7 +27,6 @@ def summarize_algo(name: str, metrics_by_seed: dict[int, dict]) -> dict:
         return {
             "name": name,
             "n_seeds": 0,
-            "seed_mean_rewards": np.array([], dtype=np.float32),
             "overall_mean": float("nan"),
             "overall_std": float("nan"),
         }
@@ -37,7 +36,6 @@ def summarize_algo(name: str, metrics_by_seed: dict[int, dict]) -> dict:
     return {
         "name": name,
         "n_seeds": int(len(seed_mean_rewards)),
-        "seed_mean_rewards": seed_mean_rewards,
         "overall_mean": float(seed_mean_rewards.mean()),
         "overall_std": float(seed_mean_rewards.std()),
     }

@@ -26,6 +26,51 @@ for SEED in 0 1 2; do
 done
 ```
 
+Architectures custom/reinforce disponibles:
+
+- `--custom-network flat_mlp` (baseline)
+- `--custom-network shared_pool` (MLP partagé non-ego + pooling + head)
+- `--custom-network pairwise_ego` (concat ego + embedding non-ego par véhicule, puis pooling)
+- `--pooling mean|max` (pour `shared_pool` et `pairwise_ego`, défaut: `mean`)
+
+Exemples:
+
+```bash
+./.venv/bin/python main.py --model custom --seed 0 --timesteps 50000 \
+  --custom-network shared_pool --pooling mean
+
+./.venv/bin/python main.py --model custom --seed 0 --timesteps 50000 \
+  --custom-network pairwise_ego --pooling max
+```
+
+### 1ter) Séparer les résultats par architecture/pooling
+
+Par défaut, les runs custom vont dans `results/custom_dqn/seed_<SEED>`.
+Si vous relancez le même `SEED` avec un autre réseau, vous pouvez écraser les fichiers.
+
+Utilisez `--output-dir` pour isoler chaque config:
+
+```bash
+# shared_pool + mean
+for SEED in 0 1 2; do
+  ./.venv/bin/python main.py --model custom --seed $SEED --timesteps 50000 --eval-runs 50 \
+    --custom-network shared_pool --pooling mean \
+    --output-dir results/custom_dqn/shared_pool_mean
+done
+
+# pairwise_ego + max
+for SEED in 0 1 2; do
+  ./.venv/bin/python main.py --model custom --seed $SEED --timesteps 50000 --eval-runs 50 \
+    --custom-network pairwise_ego --pooling max \
+    --output-dir results/custom_dqn/pairwise_ego_max
+done
+```
+
+Structure obtenue:
+
+- `results/custom_dqn/shared_pool_mean/seed_0`, `seed_1`, `seed_2`
+- `results/custom_dqn/pairwise_ego_max/seed_0`, `seed_1`, `seed_2`
+
 ### 1bis) Lancer 3 seeds en parallèle 
 
 ```bash
@@ -79,13 +124,9 @@ Chaque seed exporte aussi les artefacts d'entraînement:
 
 - `training_curves.png` (graphe reward + loss si disponible)
 - `train_episode_rewards.json` (dictionnaire `episode_i -> reward`)
-- `train_rewards.npy` (liste brute des rewards)
 - `train_losses.json` (dictionnaire `update_i -> loss`)
-- `train_losses.npy` (liste brute des losses)
+- `eval_rewards.json` (dictionnaire `run_i -> reward` pour l'évaluation)
 
-Note: sur SB3, les losses peuvent être vides sur des runs très courts (pas assez de steps avant le début d'apprentissage, ici `learning_starts=batch_size=128`).
-Note: les JSON d'entraînement (`train_episode_rewards.json`, `train_losses.json`) sont mis à jour
-pendant le training tous les 100 épisodes par défaut.
 
 Checkpoints:
 

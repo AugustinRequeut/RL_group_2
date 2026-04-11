@@ -17,6 +17,7 @@ from src.dqn import DQN, REINFORCEBaseline
 from src.evaluate import evaluate_policy
 from src.train import train_agent
 from src.utils import (
+    export_eval_rewards_dict,
     export_episode_rewards_dict,
     export_train_losses_dict,
     plot_learning_curves,
@@ -28,6 +29,8 @@ DEFAULT_OUTPUT_DIRS = {
     "sb3": "results/sb3_dqn",
     "reinforce": "results/reinforce",
 }
+
+CUSTOM_NETWORK_CHOICES = ["flat_mlp", "shared_pool", "pairwise_ego"]
 
 
 class EpisodeRewardCallback(BaseCallback):
@@ -173,9 +176,7 @@ def _save_training_episode_artifacts(
     train_rewards: list[float],
     train_losses: list[float] | None,
 ) -> None:
-    np.save(run_dir / "train_rewards.npy", np.array(train_rewards, dtype=np.float32))
     safe_losses = [] if train_losses is None else train_losses
-    np.save(run_dir / "train_losses.npy", np.array(safe_losses, dtype=np.float32))
     _save_training_json_artifacts(
         run_dir=run_dir,
         train_rewards=train_rewards,
@@ -189,39 +190,37 @@ def _save_training_episode_artifacts(
     )
 
 
-def _make_qnet_checkpoint_callback(
+def _save_eval_json_artifacts(run_dir: Path, eval_rewards: list[float]) -> None:
+    export_eval_rewards_dict(eval_rewards, str(run_dir / "eval_rewards.json"))
+
+
+def _make_torch_training_callback(
     *,
     agent,
-    checkpoint_dir: Path,
+    run_dir: Path,
     checkpoint_prefix: str,
     checkpoint_every_episodes: int,
+    save_json_every_episodes: int,
 ):
-    if checkpoint_every_episodes <= 0:
+    if checkpoint_every_episodes <= 0 and save_json_every_episodes <= 0:
         return None
 
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = run_dir / "checkpoints"
+    if checkpoint_every_episodes > 0:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    def _on_episode_end(episode_idx: int, _episode_reward: float) -> None:
-        if episode_idx % checkpoint_every_episodes == 0:
+    def _on_episode_end(
+        episode_idx: int,
+        _episode_reward: float,
+        train_rewards: list[float],
+        train_losses: list[float],
+    ) -> None:
+        if checkpoint_every_episodes > 0 and episode_idx % checkpoint_every_episodes == 0:
             checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_ep_{episode_idx:06d}.pt"
             torch.save(agent.q_net.state_dict(), checkpoint_path)
             print(f"[checkpoint] Saved: {checkpoint_path}")
 
-    return _on_episode_end
-
-
-def _make_periodic_json_snapshot_callback(
-    *,
-    run_dir: Path,
-    train_rewards: list[float],
-    train_losses: list[float] | None,
-    save_json_every_episodes: int,
-):
-    if save_json_every_episodes <= 0:
-        return None
-
-    def _on_episode_end(episode_idx: int, _episode_reward: float) -> None:
-        if episode_idx % save_json_every_episodes == 0:
+        if save_json_every_episodes > 0 and episode_idx % save_json_every_episodes == 0:
             _save_training_json_artifacts(
                 run_dir=run_dir,
                 train_rewards=train_rewards,
@@ -235,22 +234,19 @@ def _make_periodic_json_snapshot_callback(
     return _on_episode_end
 
 
-def _compose_episode_end_callbacks(*callbacks):
-    active_callbacks = [cb for cb in callbacks if cb is not None]
-    if not active_callbacks:
-        return None
-
-    def _on_episode_end(episode_idx: int, episode_reward: float) -> None:
-        for cb in active_callbacks:
-            cb(episode_idx, episode_reward)
-
-    return _on_episode_end
-
-
-def _run_custom(args) -> None:
+def _run_torch_algo(
+    args,
+    *,
+    model_key: str,
+    model_label: str,
+    agent_cls,
+    checkpoint_prefix: str,
+    final_checkpoint_name: str,
+    use_timesteps: bool,
+) -> None:
     seed_everything(args.seed)
 
-    root_dir = _resolve_output_dir("custom", args.output_dir)
+    root_dir = _resolve_output_dir(model_key, args.output_dir)
     run_dir = root_dir / f"seed_{args.seed}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -263,41 +259,33 @@ def _run_custom(args) -> None:
     action_space = train_env.single_action_space
     observation_space = train_env.single_observation_space
     dqn_cfg = {k: v for k, v in TRAINING_CONFIG.items() if k != "num_envs"}
+    dqn_cfg["network_type"] = args.custom_network
+    dqn_cfg["pooling"] = args.pooling
 
-    agent = DQN(
+    agent = agent_cls(
         action_space=action_space,
         observation_space=observation_space,
         **dqn_cfg,
     )
-    train_losses: list[float] = []
-    train_rewards: list[float] = []
-
-    checkpoint_callback = _make_qnet_checkpoint_callback(
+    on_episode_end = _make_torch_training_callback(
         agent=agent,
-        checkpoint_dir=run_dir / "checkpoints",
-        checkpoint_prefix="custom_dqn_qnet",
-        checkpoint_every_episodes=args.checkpoint_every_episodes,
-    )
-    train_json_callback = _make_periodic_json_snapshot_callback(
         run_dir=run_dir,
-        train_rewards=train_rewards,
-        train_losses=train_losses,
+        checkpoint_prefix=checkpoint_prefix,
+        checkpoint_every_episodes=args.checkpoint_every_episodes,
         save_json_every_episodes=args.save_json_every_episodes,
     )
-    on_episode_end = _compose_episode_end_callbacks(
-        checkpoint_callback,
-        train_json_callback,
-    )
 
-    losses, train_rewards = train_agent(
-        env=train_env,
-        agent=agent,
-        total_timesteps=args.timesteps,
-        eval_every=args.log_train_every,
-        on_episode_end=on_episode_end,
-        all_losses=train_losses,
-        all_rewards=train_rewards,
-    )
+    train_kwargs = {
+        "env": train_env,
+        "agent": agent,
+        "eval_every": args.log_train_every,
+        "on_episode_end": on_episode_end,
+    }
+    if use_timesteps:
+        train_kwargs["total_timesteps"] = args.timesteps
+    else:
+        train_kwargs["n_episodes"] = args.episodes
+    losses, train_rewards = train_agent(**train_kwargs)
 
     _save_training_episode_artifacts(
         run_dir=run_dir,
@@ -314,35 +302,52 @@ def _run_custom(args) -> None:
     )
 
     metrics = {
-        "model": "custom",
+        "model": model_key,
         "seed": args.seed,
-        "timesteps": args.timesteps,
         "eval_runs": 0 if args.no_eval else args.eval_runs,
         "train_completed_episodes": len(train_rewards),
         "mean_reward": float(np.mean(eval_rewards)) if eval_rewards else None,
         "std_reward": float(np.std(eval_rewards)) if eval_rewards else None,
         "quick_mode": bool(args.quick),
+        "custom_network": args.custom_network,
+        "pooling": args.pooling,
         "checkpoint_every_episodes": int(args.checkpoint_every_episodes),
         "save_json_every_episodes": int(args.save_json_every_episodes),
     }
+    if use_timesteps:
+        metrics["timesteps"] = args.timesteps
+    else:
+        metrics["episodes"] = args.episodes
 
     with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
     if eval_rewards:
-        np.save(run_dir / "eval_rewards.npy", np.array(eval_rewards, dtype=np.float32))
-    torch.save(agent.q_net.state_dict(), run_dir / "custom_dqn_qnet.pt")
+        _save_eval_json_artifacts(run_dir, eval_rewards)
+    torch.save(agent.q_net.state_dict(), run_dir / final_checkpoint_name)
 
     if eval_rewards:
         print(
-            f"Custom DQN | seed={args.seed} | mean={metrics['mean_reward']:.2f} "
+            f"{model_label} | seed={args.seed} | mean={metrics['mean_reward']:.2f} "
             f"+/- {metrics['std_reward']:.2f} over {args.eval_runs} runs"
         )
     else:
-        print(f"Custom DQN | seed={args.seed} | evaluation skipped")
+        print(f"{model_label} | seed={args.seed} | evaluation skipped")
     print(f"Metrics saved to: {run_dir / 'metrics.json'}")
 
     train_env.close()
+
+
+def _run_custom(args) -> None:
+    _run_torch_algo(
+        args,
+        model_key="custom",
+        model_label="Custom DQN",
+        agent_cls=DQN,
+        checkpoint_prefix="custom_dqn_qnet",
+        final_checkpoint_name="custom_dqn_qnet.pt",
+        use_timesteps=True,
+    )
 
 
 def _run_sb3(args) -> None:
@@ -429,7 +434,7 @@ def _run_sb3(args) -> None:
         json.dump(metrics, f, indent=2)
 
     if eval_rewards:
-        np.save(run_dir / "eval_rewards.npy", np.array(eval_rewards, dtype=np.float32))
+        _save_eval_json_artifacts(run_dir, eval_rewards)
 
     if eval_rewards:
         print(
@@ -445,100 +450,15 @@ def _run_sb3(args) -> None:
 
 
 def _run_reinforce(args) -> None:
-    seed_everything(args.seed)
-
-    root_dir = _resolve_output_dir("reinforce", args.output_dir)
-    run_dir = root_dir / f"seed_{args.seed}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    train_env = gym.make_vec(
-        SHARED_CORE_ENV_ID,
-        num_envs=args.num_envs,
-        config=SHARED_CORE_CONFIG,
-    )
-
-    action_space = train_env.single_action_space
-    observation_space = train_env.single_observation_space
-    dqn_cfg = {k: v for k, v in TRAINING_CONFIG.items() if k != "num_envs"}
-    agent = REINFORCEBaseline(
-        action_space=action_space,
-        observation_space=observation_space,
-        **dqn_cfg,
-    )
-    train_losses: list[float] = []
-    train_rewards: list[float] = []
-
-    checkpoint_callback = _make_qnet_checkpoint_callback(
-        agent=agent,
-        checkpoint_dir=run_dir / "checkpoints",
+    _run_torch_algo(
+        args,
+        model_key="reinforce",
+        model_label="REINFORCE",
+        agent_cls=REINFORCEBaseline,
         checkpoint_prefix="reinforce_qnet",
-        checkpoint_every_episodes=args.checkpoint_every_episodes,
+        final_checkpoint_name="reinforce_qnet.pt",
+        use_timesteps=False,
     )
-    train_json_callback = _make_periodic_json_snapshot_callback(
-        run_dir=run_dir,
-        train_rewards=train_rewards,
-        train_losses=train_losses,
-        save_json_every_episodes=args.save_json_every_episodes,
-    )
-    on_episode_end = _compose_episode_end_callbacks(
-        checkpoint_callback,
-        train_json_callback,
-    )
-
-    losses, train_rewards = train_agent(
-        env=train_env,
-        agent=agent,
-        n_episodes=args.episodes,
-        eval_every=args.log_train_every,
-        on_episode_end=on_episode_end,
-        all_losses=train_losses,
-        all_rewards=train_rewards,
-    )
-
-    _save_training_episode_artifacts(
-        run_dir=run_dir,
-        train_rewards=train_rewards,
-        train_losses=losses,
-    )
-
-    eval_policy_fn = lambda state: agent.get_action(state, epsilon=0.0)
-    eval_rewards = _evaluate_policy_only(
-        policy_fn=eval_policy_fn,
-        seed=args.seed,
-        eval_runs=args.eval_runs,
-        no_eval=args.no_eval,
-    )
-
-    metrics = {
-        "model": "reinforce",
-        "seed": args.seed,
-        "episodes": args.episodes,
-        "eval_runs": 0 if args.no_eval else args.eval_runs,
-        "train_completed_episodes": len(train_rewards),
-        "mean_reward": float(np.mean(eval_rewards)) if eval_rewards else None,
-        "std_reward": float(np.std(eval_rewards)) if eval_rewards else None,
-        "quick_mode": bool(args.quick),
-        "checkpoint_every_episodes": int(args.checkpoint_every_episodes),
-        "save_json_every_episodes": int(args.save_json_every_episodes),
-    }
-
-    with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
-        json.dump(metrics, f, indent=2)
-
-    if eval_rewards:
-        np.save(run_dir / "eval_rewards.npy", np.array(eval_rewards, dtype=np.float32))
-    torch.save(agent.q_net.state_dict(), run_dir / "reinforce_qnet.pt")
-
-    if eval_rewards:
-        print(
-            f"REINFORCE | seed={args.seed} | mean={metrics['mean_reward']:.2f} "
-            f"+/- {metrics['std_reward']:.2f} over {args.eval_runs} runs"
-        )
-    else:
-        print(f"REINFORCE | seed={args.seed} | evaluation skipped")
-    print(f"Metrics saved to: {run_dir / 'metrics.json'}")
-
-    train_env.close()
 
 
 def _build_parser(model_override: str | None = None) -> argparse.ArgumentParser:
@@ -591,6 +511,21 @@ def _build_parser(model_override: str | None = None) -> argparse.ArgumentParser:
         type=int,
         default=100,
         help="Update training JSON snapshots every N completed episodes (0 disables).",
+    )
+    parser.add_argument(
+        "--custom-network",
+        choices=CUSTOM_NETWORK_CHOICES,
+        default="flat_mlp",
+        help=(
+            "Network architecture for custom/reinforce: "
+            "flat_mlp | shared_pool | pairwise_ego."
+        ),
+    )
+    parser.add_argument(
+        "--pooling",
+        choices=["mean", "max"],
+        default="mean",
+        help="Pooling mode for shared_pool and pairwise_ego architectures.",
     )
     return parser
 

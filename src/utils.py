@@ -38,20 +38,6 @@ def plot_learning_curves(losses, rewards, save_dir="results", filename="training
     plt.close(fig)
 
 
-def plot_episode_rewards(rewards, save_path):
-    if rewards is None or len(rewards) == 0:
-        return
-
-    save_dir = os.path.dirname(save_path) or "."
-    filename = os.path.basename(save_path)
-    plot_learning_curves(
-        losses=None,
-        rewards=rewards,
-        save_dir=save_dir,
-        filename=filename,
-    )
-
-
 def export_episode_rewards_dict(rewards, save_path):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     episode_rewards = {f"episode_{i+1}": float(r) for i, r in enumerate(rewards)}
@@ -65,17 +51,12 @@ def export_train_losses_dict(losses, save_path):
     with open(save_path, "w", encoding="utf-8") as f:
         json.dump(train_losses, f, indent=2)
 
-def record_final_agent_video(agent, render_env, save_dir="results/video"):
-    def _policy_fn(state):
-        return agent.get_action(state, epsilon=0)
 
-    total_reward = record_policy_video(
-        render_env=render_env,
-        policy_fn=_policy_fn,
-        save_dir=save_dir,
-        name_prefix="final_agent_run",
-    )
-    print(f"Video episode total reward: {total_reward:.2f}")
+def export_eval_rewards_dict(rewards, save_path):
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    eval_rewards = {f"run_{i+1}": float(r) for i, r in enumerate(rewards)}
+    with open(save_path, "w", encoding="utf-8") as f:
+        json.dump(eval_rewards, f, indent=2)
 
 
 def record_policy_video(

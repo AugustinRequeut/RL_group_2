@@ -9,16 +9,12 @@ def train_agent(
     total_timesteps=None,
     eval_every=50,
     on_episode_end=None,
-    all_losses=None,
-    all_rewards=None,
 ):
     if (n_episodes is None) == (total_timesteps is None):
         raise ValueError("Specify exactly one of `n_episodes` or `total_timesteps`.")
 
-    if all_losses is None:
-        all_losses = []
-    if all_rewards is None:
-        all_rewards = []
+    all_losses = []
+    all_rewards = []
     episode_rewards = np.zeros(env.num_envs, dtype=np.float32)
 
     states, _ = env.reset()
@@ -67,7 +63,12 @@ def train_agent(
                     episode_rewards[i] = 0.0
                     completed_episodes += 1
                     if on_episode_end is not None:
-                        on_episode_end(completed_episodes, episode_reward)
+                        on_episode_end(
+                            completed_episodes,
+                            episode_reward,
+                            all_rewards,
+                            all_losses,
+                        )
                     if n_episodes is not None:
                         pbar.update(1)
                     if eval_every > 0 and completed_episodes % eval_every == 0:
