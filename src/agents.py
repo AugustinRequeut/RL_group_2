@@ -1,6 +1,7 @@
 # Imports
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import random
@@ -53,6 +54,44 @@ class Net(nn.Module):
     def forward(self, x):
         return self.net(x.float())
 
+class AttentionNet(nn.Module):
+    """
+    Permutation-invariant network for kinematic observations.
+    Each vehicle is treated as a token; multi-head attention
+    aggregates the fleet before predicting Q-values.
+    """
+
+    def __init__(self, obs_shape, hidden_size, n_actions, n_heads=8):
+        super(AttentionNet, self).__init__()
+        n_vehicles, n_features = obs_shape
+        
+        self.embedding = nn.Linear(n_features, hidden_size)
+        self.register_buffer('position',torch.zeros((n_vehicles,1)))
+        self.position[0] = 1.
+
+        self.attention = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=n_heads,
+            batch_first=True,
+        )
+        self.norm = nn.LayerNorm(hidden_size)
+
+        self.head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, n_actions),
+        )
+
+    def forward(self, x):
+
+        tokens = F.relu(self.embedding(x))+self.position
+
+        attended, _ = self.attention(tokens, tokens, tokens)
+        tokens = self.norm(tokens + attended)          # residual connection
+
+        pooled = tokens.mean(dim=1)
+
+        return self.head(pooled)
 
 class DQN:
     def __init__(
@@ -165,8 +204,8 @@ class DQN:
         n_actions = self.action_space.n
 
         self.buffer = ReplayBuffer(self.buffer_capacity)
-        self.q_net = Net(obs_shape, hidden_size, n_actions)
-        self.target_net = Net(obs_shape, hidden_size, n_actions)
+        self.q_net = AttentionNet(obs_shape, hidden_size, n_actions)
+        self.target_net = AttentionNet(obs_shape, hidden_size, n_actions)
 
         self.loss_function = nn.MSELoss()
         self.optimizer = optim.Adam(
@@ -204,11 +243,11 @@ class REINFORCEBaseline:
         self.learning_rate = learning_rate
 
         # Reset
-        hidden_size = 128
+        hidden_size = 256
 
         n_actions = self.action_space.n
 
-        self.policy_net = Net(self.observation_space.shape, hidden_size, n_actions)
+        self.policy_net = AttentionNet(self.observation_space.shape, hidden_size, n_actions)
 
         self.scores = []
         self.current_episode = []
@@ -293,12 +332,12 @@ class REINFORCEBaseline:
         self.current_episode = []
 
     def reset(self):
-        hidden_size = 128
+        hidden_size = 256
 
         obs_size = self.observation_space.shape[0]
         n_actions = self.action_space.n
 
-        self.policy_net = Net(obs_size, hidden_size, n_actions)
+        self.policy_net = AttentionNet(obs_size, hidden_size, n_actions)
 
         self.scores = []
         self.current_episode = []
@@ -328,12 +367,12 @@ class ActorCriticBasic:
         self.loss_function = nn.MSELoss()
 
         # Reset
-        hidden_size = 128
+        hidden_size = 256
 
         n_actions = self.action_space.n
 
-        self.actor = Net(self.observation_space.shape, hidden_size, n_actions)
-        self.critic = Net(self.observation_space.shape, hidden_size, 1)
+        self.actor = AttentionNet(self.observation_space.shape, hidden_size, n_actions)
+        self.critic = AttentionNet(self.observation_space.shape, hidden_size, 1)
 
         self.actor_optimizer = optim.Adam(
             params=self.actor.parameters(), lr=self.actor_learning_rate

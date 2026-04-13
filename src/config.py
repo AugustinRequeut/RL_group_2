@@ -34,14 +34,14 @@ SHARED_CORE_CONFIG = {
 }
 
 TRAINING_CONFIG = {
-    "gamma": 0.97,
+    "gamma": 0.99,
     "batch_size": 128,
-    "buffer_capacity": 50_000,
+    "buffer_capacity": 200_000,
     "update_target_every": 500,
     "epsilon_start": 1.0,
-    "decrease_epsilon_factor": 1000,
+    "decrease_epsilon_factor": 50_000,
     "epsilon_min": 0.05,
-    "learning_rate": 1e-4,
+    "learning_rate": 5e-4,
     "num_envs": 4
 }
 
