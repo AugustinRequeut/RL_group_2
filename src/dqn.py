@@ -66,6 +66,9 @@ class AttentionNet(nn.Module):
         n_vehicles, n_features = obs_shape
         
         self.embedding = nn.Linear(n_features, hidden_size)
+        self.position = torch.zeros((n_vehicles,1))
+        self.register_buffer('position',torch.zeros((n_vehicles,1)))
+        self.position[0] = 1.
 
         self.attention = nn.MultiheadAttention(
             embed_dim=hidden_size,
@@ -82,7 +85,7 @@ class AttentionNet(nn.Module):
 
     def forward(self, x):
 
-        tokens = F.relu(self.embedding(x))
+        tokens = F.relu(self.embedding(x))+self.position
 
         attended, _ = self.attention(tokens, tokens, tokens)
         tokens = self.norm(tokens + attended)          # residual connection
