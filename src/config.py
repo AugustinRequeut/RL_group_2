@@ -44,6 +44,6 @@ TRAINING_CONFIG = {
     "epsilon_warmup_fraction": 0.01,
     "timesteps_per_episode_estimate": 25.0,
     "learning_rate": 2e-4,
-    "gradient_clip_norm": 100.0,
+    "gradient_clip_norm": 25.0,
     "num_envs": 4
 }

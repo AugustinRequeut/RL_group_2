@@ -230,7 +230,7 @@ class DQN:
         epsilon_min,
         learning_rate,
         epsilon_warmup_episodes=0,
-        gradient_clip_norm=100.0,
+        gradient_clip_norm=25.0,
         network_type="flat_mlp",
         pooling="mean",
     ):
@@ -372,7 +372,7 @@ class DQN:
                 "Use one of: flat_mlp, shared_pool, pairwise_ego."
             )
 
-        self.loss_function = nn.SmoothL1Loss()
+        self.loss_function = nn.MSELoss()
         self.optimizer = optim.Adam(
             params=self.q_net.parameters(), lr=self.learning_rate
         )
@@ -395,7 +395,7 @@ class REINFORCEBaseline(DQN):
         epsilon_min,
         learning_rate,
         epsilon_warmup_episodes=0,
-        gradient_clip_norm=100.0,
+        gradient_clip_norm=25.0,
         network_type="flat_mlp",
         pooling="mean",
     ):

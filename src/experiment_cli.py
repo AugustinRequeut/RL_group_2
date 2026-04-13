@@ -99,17 +99,50 @@ class EpisodeRewardCallback(BaseCallback):
 
 
 def _attach_sb3_loss_collector(model: SB3DQN, loss_store: list[float]) -> None:
-    original_train = model.train
+    def _train_with_mse(gradient_steps: int, batch_size: int = 100) -> None:
+        model.policy.set_training_mode(True)
+        model._update_learning_rate(model.policy.optimizer)
 
-    def _train_with_capture(*args, **kwargs):
-        result = original_train(*args, **kwargs)
-        logger_values = getattr(model.logger, "name_to_value", {})
-        maybe_loss = logger_values.get("train/loss")
-        if maybe_loss is not None and np.isfinite(maybe_loss):
-            loss_store.append(float(maybe_loss))
-        return result
+        losses: list[float] = []
+        for _ in range(gradient_steps):
+            replay_data = model.replay_buffer.sample(
+                batch_size, env=model._vec_normalize_env
+            )
+            discounts = (
+                replay_data.discounts
+                if replay_data.discounts is not None
+                else model.gamma
+            )
 
-    model.train = _train_with_capture
+            with torch.no_grad():
+                next_q_values = model.q_net_target(replay_data.next_observations)
+                next_q_values, _ = next_q_values.max(dim=1)
+                next_q_values = next_q_values.reshape(-1, 1)
+                target_q_values = replay_data.rewards + (1 - replay_data.dones) * discounts * next_q_values
+
+            current_q_values = model.q_net(replay_data.observations)
+            current_q_values = torch.gather(
+                current_q_values, dim=1, index=replay_data.actions.long()
+            )
+
+            loss = torch.nn.functional.mse_loss(current_q_values, target_q_values)
+            losses.append(float(loss.item()))
+
+            model.policy.optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                model.policy.parameters(), model.max_grad_norm
+            )
+            model.policy.optimizer.step()
+
+        model._n_updates += gradient_steps
+        mean_loss = float(np.mean(losses)) if losses else float("nan")
+        model.logger.record("train/n_updates", model._n_updates, exclude="tensorboard")
+        model.logger.record("train/loss", mean_loss)
+        if np.isfinite(mean_loss):
+            loss_store.append(mean_loss)
+
+    model.train = _train_with_mse
 
 
 def _estimate_expected_episodes_from_timesteps(total_timesteps: int) -> int:
