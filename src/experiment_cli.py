@@ -112,6 +112,96 @@ def _attach_sb3_loss_collector(model: SB3DQN, loss_store: list[float]) -> None:
     model.train = _train_with_capture
 
 
+def _estimate_expected_episodes_from_timesteps(total_timesteps: int) -> int:
+    steps_per_episode = float(TRAINING_CONFIG.get("timesteps_per_episode_estimate", 25.0))
+    steps_per_episode = max(1.0, steps_per_episode)
+    return max(1, int(round(float(total_timesteps) / steps_per_episode)))
+
+
+def _compute_epsilon_warmup_episodes(*, use_timesteps: bool, timesteps: int, episodes: int) -> int:
+    warmup_fraction = float(TRAINING_CONFIG.get("epsilon_warmup_fraction", 0.0))
+    if warmup_fraction <= 0.0:
+        return 0
+    if use_timesteps:
+        expected_episodes = _estimate_expected_episodes_from_timesteps(timesteps)
+    else:
+        expected_episodes = max(1, int(episodes))
+    return max(0, int(round(warmup_fraction * expected_episodes)))
+
+
+def _make_exponential_epsilon_schedule(
+    *,
+    total_timesteps: int,
+    epsilon_start: float,
+    epsilon_min: float,
+    warmup_steps: int,
+    decay_steps: float,
+):
+    total_timesteps = max(1, int(total_timesteps))
+    warmup_steps = max(0, int(warmup_steps))
+    decay_steps = max(1.0, float(decay_steps))
+
+    def _schedule(progress_remaining: float) -> float:
+        progress_remaining = float(np.clip(progress_remaining, 0.0, 1.0))
+        elapsed_steps = (1.0 - progress_remaining) * float(total_timesteps)
+        if elapsed_steps < warmup_steps:
+            return float(epsilon_start)
+        decayed_steps = elapsed_steps - float(warmup_steps)
+        return float(
+            epsilon_min + (epsilon_start - epsilon_min) * np.exp(-decayed_steps / decay_steps)
+        )
+
+    return _schedule
+
+
+def _build_custom_epsilon_curve(
+    *,
+    n_episodes: int,
+    epsilon_start: float,
+    epsilon_min: float,
+    decrease_epsilon_factor: float,
+    warmup_episodes: int,
+):
+    n_episodes = max(0, int(n_episodes))
+    warmup_episodes = max(0, int(warmup_episodes))
+    decay_factor = max(1.0, float(decrease_epsilon_factor))
+    x = np.arange(1, n_episodes + 1, dtype=np.float32)
+    y = np.empty(n_episodes, dtype=np.float32)
+    for i, ep in enumerate(range(1, n_episodes + 1)):
+        if ep <= warmup_episodes:
+            y[i] = float(epsilon_start)
+        else:
+            decayed_ep = ep - warmup_episodes
+            y[i] = float(
+                epsilon_min + (epsilon_start - epsilon_min) * np.exp(-1.0 * decayed_ep / decay_factor)
+            )
+    return x, y
+
+
+def _build_sb3_epsilon_curve(
+    *,
+    total_timesteps: int,
+    epsilon_start: float,
+    epsilon_min: float,
+    warmup_steps: int,
+    decay_steps: float,
+):
+    total_timesteps = max(0, int(total_timesteps))
+    warmup_steps = max(0, int(warmup_steps))
+    decay_steps = max(1.0, float(decay_steps))
+    x = np.arange(0, total_timesteps + 1, dtype=np.float32)
+    y = np.empty(total_timesteps + 1, dtype=np.float32)
+    for i, step in enumerate(range(total_timesteps + 1)):
+        if step < warmup_steps:
+            y[i] = float(epsilon_start)
+        else:
+            decayed = step - warmup_steps
+            y[i] = float(
+                epsilon_min + (epsilon_start - epsilon_min) * np.exp(-1.0 * decayed / decay_steps)
+            )
+    return x, y
+
+
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -167,24 +257,30 @@ def _save_training_json_artifacts(
     train_losses: list[float] | None,
 ) -> None:
     export_episode_rewards_dict(train_rewards, str(run_dir / "train_episode_rewards.json"))
-    safe_losses = [] if train_losses is None else train_losses
-    export_train_losses_dict(safe_losses, str(run_dir / "train_losses.json"))
+    losses = [] if train_losses is None else train_losses
+    export_train_losses_dict(losses, str(run_dir / "train_losses.json"))
 
 
 def _save_training_episode_artifacts(
     run_dir: Path,
     train_rewards: list[float],
     train_losses: list[float] | None,
+    epsilon_values=None,
+    epsilon_x=None,
+    epsilon_xlabel: str = "Episodes",
 ) -> None:
-    safe_losses = [] if train_losses is None else train_losses
+    losses = [] if train_losses is None else train_losses
     _save_training_json_artifacts(
         run_dir=run_dir,
         train_rewards=train_rewards,
         train_losses=train_losses,
     )
     plot_learning_curves(
-        losses=safe_losses,
+        losses=losses,
         rewards=train_rewards,
+        epsilon_values=epsilon_values,
+        epsilon_x=epsilon_x,
+        epsilon_xlabel=epsilon_xlabel,
         save_dir=str(run_dir),
         filename="training_curves.png",
     )
@@ -258,7 +354,23 @@ def _run_torch_algo(
 
     action_space = train_env.single_action_space
     observation_space = train_env.single_observation_space
-    dqn_cfg = {k: v for k, v in TRAINING_CONFIG.items() if k != "num_envs"}
+    epsilon_warmup_episodes = _compute_epsilon_warmup_episodes(
+        use_timesteps=use_timesteps,
+        timesteps=int(args.timesteps),
+        episodes=int(args.episodes),
+    )
+    dqn_cfg = {
+        "gamma": TRAINING_CONFIG["gamma"],
+        "batch_size": TRAINING_CONFIG["batch_size"],
+        "buffer_capacity": TRAINING_CONFIG["buffer_capacity"],
+        "update_target_every": TRAINING_CONFIG["update_target_every"],
+        "epsilon_start": TRAINING_CONFIG["epsilon_start"],
+        "decrease_epsilon_factor": TRAINING_CONFIG["decrease_epsilon_factor"],
+        "epsilon_min": TRAINING_CONFIG["epsilon_min"],
+        "epsilon_warmup_episodes": epsilon_warmup_episodes,
+        "learning_rate": TRAINING_CONFIG["learning_rate"],
+        "gradient_clip_norm": TRAINING_CONFIG["gradient_clip_norm"],
+    }
     dqn_cfg["network_type"] = args.custom_network
     dqn_cfg["pooling"] = args.pooling
 
@@ -287,10 +399,21 @@ def _run_torch_algo(
         train_kwargs["n_episodes"] = args.episodes
     losses, train_rewards = train_agent(**train_kwargs)
 
+    eps_x, eps_y = _build_custom_epsilon_curve(
+        n_episodes=len(train_rewards),
+        epsilon_start=float(TRAINING_CONFIG["epsilon_start"]),
+        epsilon_min=float(TRAINING_CONFIG["epsilon_min"]),
+        decrease_epsilon_factor=float(TRAINING_CONFIG["decrease_epsilon_factor"]),
+        warmup_episodes=int(epsilon_warmup_episodes),
+    )
+
     _save_training_episode_artifacts(
         run_dir=run_dir,
         train_rewards=train_rewards,
         train_losses=losses,
+        epsilon_values=eps_y,
+        epsilon_x=eps_x,
+        epsilon_xlabel="Completed episodes",
     )
 
     eval_policy_fn = lambda state: agent.get_action(state, epsilon=0.0)
@@ -313,6 +436,9 @@ def _run_torch_algo(
         "pooling": args.pooling,
         "checkpoint_every_episodes": int(args.checkpoint_every_episodes),
         "save_json_every_episodes": int(args.save_json_every_episodes),
+        "epsilon_schedule": "exp_by_completed_episodes",
+        "epsilon_warmup_episodes": int(epsilon_warmup_episodes),
+        "decrease_epsilon_factor": int(TRAINING_CONFIG["decrease_epsilon_factor"]),
     }
     if use_timesteps:
         metrics["timesteps"] = args.timesteps
@@ -375,13 +501,31 @@ def _run_sb3(args) -> None:
         buffer_size=TRAINING_CONFIG["buffer_capacity"],
         target_update_interval=TRAINING_CONFIG["update_target_every"],
         learning_starts=TRAINING_CONFIG["batch_size"],
-        train_freq=4,
-        gradient_steps=1,
+        train_freq=1,
+        gradient_steps=4,
+        max_grad_norm=TRAINING_CONFIG["gradient_clip_norm"],
         exploration_initial_eps=TRAINING_CONFIG["epsilon_start"],
         exploration_final_eps=TRAINING_CONFIG["epsilon_min"],
         exploration_fraction=0.3,
         verbose=1,
     )
+
+    epsilon_warmup_steps = max(
+        0,
+        int(round(float(TRAINING_CONFIG.get("epsilon_warmup_fraction", 0.0)) * int(args.timesteps))),
+    )
+    epsilon_decay_steps = float(TRAINING_CONFIG["decrease_epsilon_factor"]) * float(
+        TRAINING_CONFIG.get("timesteps_per_episode_estimate", 25.0)
+    )
+    model.exploration_schedule = _make_exponential_epsilon_schedule(
+        total_timesteps=int(args.timesteps),
+        epsilon_start=float(TRAINING_CONFIG["epsilon_start"]),
+        epsilon_min=float(TRAINING_CONFIG["epsilon_min"]),
+        warmup_steps=epsilon_warmup_steps,
+        decay_steps=epsilon_decay_steps,
+    )
+    model.exploration_rate = float(TRAINING_CONFIG["epsilon_start"])
+
     train_losses: list[float] = []
     _attach_sb3_loss_collector(model, train_losses)
 
@@ -403,10 +547,21 @@ def _run_sb3(args) -> None:
     model.save(str(model_path))
     train_rewards = reward_callback.episode_rewards
 
+    eps_x, eps_y = _build_sb3_epsilon_curve(
+        total_timesteps=int(args.timesteps),
+        epsilon_start=float(TRAINING_CONFIG["epsilon_start"]),
+        epsilon_min=float(TRAINING_CONFIG["epsilon_min"]),
+        warmup_steps=int(epsilon_warmup_steps),
+        decay_steps=float(epsilon_decay_steps),
+    )
+
     _save_training_episode_artifacts(
         run_dir=run_dir,
         train_rewards=train_rewards,
         train_losses=train_losses,
+        epsilon_values=eps_y,
+        epsilon_x=eps_x,
+        epsilon_xlabel="Timesteps",
     )
 
     eval_policy_fn = lambda state: model.predict(state, deterministic=True)[0]
@@ -428,6 +583,9 @@ def _run_sb3(args) -> None:
         "quick_mode": bool(args.quick),
         "checkpoint_every_episodes": int(args.checkpoint_every_episodes),
         "save_json_every_episodes": int(args.save_json_every_episodes),
+        "epsilon_schedule": "exp_by_timesteps",
+        "epsilon_warmup_steps": int(epsilon_warmup_steps),
+        "epsilon_decay_steps": float(epsilon_decay_steps),
     }
 
     with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
@@ -461,15 +619,14 @@ def _run_reinforce(args) -> None:
     )
 
 
-def _build_parser(model_override: str | None = None) -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unified RL runner for custom, SB3 and REINFORCE.")
-    if model_override is None:
-        parser.add_argument(
-            "--model",
-            choices=["custom", "sb3", "reinforce"],
-            default="custom",
-            help="Model to train/evaluate.",
-        )
+    parser.add_argument(
+        "--model",
+        choices=["custom", "sb3", "reinforce"],
+        default="custom",
+        help="Model to train/evaluate.",
+    )
 
     parser.add_argument("--seed", type=int, default=0, help="Random seed.")
     parser.add_argument(
@@ -530,10 +687,10 @@ def _build_parser(model_override: str | None = None) -> argparse.ArgumentParser:
     return parser
 
 
-def run_experiment_cli(model_override: str | None = None) -> None:
-    parser = _build_parser(model_override=model_override)
+def run_experiment_cli() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
-    model = model_override if model_override is not None else args.model
+    model = args.model
 
     _apply_quick_defaults(args, model=model)
 

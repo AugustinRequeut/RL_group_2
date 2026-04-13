@@ -2,13 +2,26 @@ import matplotlib.pyplot as plt
 import os
 import gymnasium as gym
 import json
+import numpy as np
 from gymnasium.wrappers import RecordVideo
 
-def plot_learning_curves(losses, rewards, save_dir="results", filename="training_curves.png"):
+def plot_learning_curves(
+    losses,
+    rewards,
+    epsilon_values=None,
+    epsilon_x=None,
+    epsilon_xlabel="Episodes",
+    save_dir="results",
+    filename="training_curves.png",
+):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+    has_epsilon = epsilon_values is not None
+    if has_epsilon:
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 11))
+    else:
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
 
     if losses is None or len(losses) == 0:
         ax1.plot([], [], color="red")
@@ -32,6 +45,32 @@ def plot_learning_curves(losses, rewards, save_dir="results", filename="training
     ax2.set_xlabel("Episodes")
     ax2.set_ylabel("Reward")
     ax2.grid(True)
+
+    if has_epsilon:
+        eps_arr = np.asarray(epsilon_values, dtype=np.float32).reshape(-1)
+        if epsilon_x is None:
+            x_arr = np.arange(1, len(eps_arr) + 1)
+        else:
+            x_arr = np.asarray(epsilon_x, dtype=np.float32).reshape(-1)
+
+        if len(eps_arr) == 0:
+            ax3.plot([], [], color="purple")
+            ax3.text(
+                0.5,
+                0.5,
+                "No epsilon data",
+                transform=ax3.transAxes,
+                ha="center",
+                va="center",
+                fontsize=10,
+            )
+        else:
+            ax3.plot(x_arr, eps_arr, color="purple")
+        ax3.set_title("Exploration Epsilon")
+        ax3.set_xlabel(epsilon_xlabel)
+        ax3.set_ylabel("Epsilon")
+        ax3.set_ylim(-0.02, 1.02)
+        ax3.grid(True)
 
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, filename))

@@ -81,7 +81,7 @@ def _lane_id(env) -> int | None:
     return int(env.unwrapped.vehicle.lane_index[2])
 
 
-def _termination_reason(terminated: bool, truncated: bool, info: dict, env) -> str:
+def _termination_reason(truncated: bool, info: dict, env) -> str:
     if truncated:
         return "timeout"
 
@@ -91,13 +91,10 @@ def _termination_reason(terminated: bool, truncated: bool, info: dict, env) -> s
     if not bool(env.unwrapped.vehicle.on_road):
         return "offroad"
 
-    # Keep only the three categories used in the report.
-    _ = terminated
     return "timeout"
 
 
-def _step_speed(info: dict, env) -> float | None:
-    _ = env
+def _step_speed(info: dict) -> float:
     return float(info["speed"])
 
 
@@ -270,7 +267,6 @@ def _evaluate_checkpoint(
     n_episodes: int,
     seed_start: int,
     algo: str,
-    show_episode_tqdm: bool = True,
 ) -> tuple[list[dict], dict, list[float]]:
     if algo == "custom":
         agent = load_custom_agent(checkpoint_path)
@@ -282,22 +278,19 @@ def _evaluate_checkpoint(
     episode_records: list[dict] = []
     all_step_speeds: list[float] = []
 
-    episode_iter = range(n_episodes)
-    if show_episode_tqdm:
-        episode_iter = tqdm(
-            episode_iter,
-            total=n_episodes,
-            desc=f"Episodes {checkpoint_path.stem}",
-            unit="ep",
-            leave=False,
-        )
+    episode_iter = tqdm(
+        range(n_episodes),
+        total=n_episodes,
+        desc=f"Episodes {checkpoint_path.stem}",
+        unit="ep",
+        leave=False,
+    )
 
     for episode_idx in episode_iter:
         seed = seed_start + episode_idx
         env = gym.make(SHARED_CORE_ENV_ID, config=SHARED_CORE_CONFIG)
         try:
-            state, info = env.reset(seed=seed)
-            _ = info
+            state, _ = env.reset(seed=seed)
 
             total_reward = 0.0
             episode_length = 0
@@ -315,7 +308,7 @@ def _evaluate_checkpoint(
                 total_reward += float(reward)
                 episode_length += 1
 
-                speed_now = _step_speed(info, env)
+                speed_now = _step_speed(info)
                 all_step_speeds.append(float(speed_now))
                 episode_step_speeds.append(float(speed_now))
 
@@ -333,7 +326,7 @@ def _evaluate_checkpoint(
                     "lane_changes": int(lane_changes),
                     "mean_speed": float(np.mean(episode_step_speeds)),
                     "termination_reason": _termination_reason(
-                        bool(terminated), bool(truncated), final_info, env
+                        bool(truncated), final_info, env
                     ),
                 }
             )
@@ -354,7 +347,6 @@ def _evaluate_checkpoint_task(task: dict) -> dict:
         n_episodes=int(task["episodes_per_checkpoint"]),
         seed_start=int(task["seed_start"]),
         algo=str(task["algo"]),
-        show_episode_tqdm=True,
     )
     return {
         "checkpoint_path": str(checkpoint_path),
@@ -464,7 +456,6 @@ def main() -> None:
                 n_episodes=args.episodes_per_checkpoint,
                 seed_start=args.seed_start,
                 algo=args.algo,
-                show_episode_tqdm=True,
             )
             total_episode_records_all_selected.extend(episode_records)
             total_step_speeds_all_selected.extend(step_speeds)

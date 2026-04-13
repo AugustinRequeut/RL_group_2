@@ -41,6 +41,9 @@ TRAINING_CONFIG = {
     "epsilon_start": 1.0,
     "decrease_epsilon_factor": 1000,
     "epsilon_min": 0.05,
-    "learning_rate": 1e-4,
+    "epsilon_warmup_fraction": 0.01,
+    "timesteps_per_episode_estimate": 25.0,
+    "learning_rate": 2e-4,
+    "gradient_clip_norm": 100.0,
     "num_envs": 4
 }

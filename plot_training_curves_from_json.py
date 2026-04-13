@@ -42,11 +42,21 @@ def _epsilon_curve_custom(
     epsilon_start: float,
     epsilon_min: float,
     decrease_epsilon_factor: float,
+    warmup_episodes: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, str]:
-    x = np.arange(1, n_episodes + 1, dtype=np.float64)
-    y = epsilon_min + (epsilon_start - epsilon_min) * np.exp(
-        -1.0 * x / float(decrease_epsilon_factor)
-    )
+    x = np.arange(0, n_episodes + 1, dtype=np.float64)
+    warmup_episodes = max(0, int(warmup_episodes))
+    decay_factor = max(1.0, float(decrease_epsilon_factor))
+    y = np.empty_like(x, dtype=np.float64)
+    for i, ep in enumerate(x):
+        if ep < warmup_episodes:
+            y[i] = float(epsilon_start)
+        else:
+            decayed_ep = ep - warmup_episodes
+            y[i] = float(
+                epsilon_min
+                + (epsilon_start - epsilon_min) * np.exp(-1.0 * decayed_ep / decay_factor)
+            )
     return x, y, "Completed episodes"
 
 
@@ -60,6 +70,29 @@ def _epsilon_curve_sb3(
     ramp = max(1.0, float(exploration_fraction) * float(timesteps))
     frac = np.clip(x / ramp, 0.0, 1.0)
     y = epsilon_start + frac * (epsilon_final - epsilon_start)
+    return x, y, "Timesteps"
+
+
+def _epsilon_curve_sb3_exponential(
+    timesteps: int,
+    epsilon_start: float,
+    epsilon_min: float,
+    warmup_steps: int,
+    decay_steps: float,
+) -> tuple[np.ndarray, np.ndarray, str]:
+    x = np.arange(0, timesteps + 1, dtype=np.float64)
+    warmup_steps = max(0, int(warmup_steps))
+    decay_steps = max(1.0, float(decay_steps))
+    y = np.empty_like(x, dtype=np.float64)
+    for i, step in enumerate(x):
+        if step < warmup_steps:
+            y[i] = float(epsilon_start)
+        else:
+            decayed = step - warmup_steps
+            y[i] = float(
+                epsilon_min
+                + (epsilon_start - epsilon_min) * np.exp(-1.0 * decayed / decay_steps)
+            )
     return x, y, "Timesteps"
 
 
@@ -140,17 +173,29 @@ def _plot_one_run(
             epsilon_start=epsilon_start,
             epsilon_min=epsilon_final,
             decrease_epsilon_factor=custom_decay,
+            warmup_episodes=int(metrics.get("epsilon_warmup_episodes", 0)),
         )
         curve_label = "custom epsilon (exp by completed episodes)"
     elif model == "sb3":
         timesteps = int(metrics.get("timesteps", 0))
-        x_eps, y_eps, x_label = _epsilon_curve_sb3(
-            timesteps=timesteps,
-            epsilon_start=epsilon_start,
-            epsilon_final=epsilon_final,
-            exploration_fraction=sb3_exploration_fraction,
-        )
-        curve_label = "sb3 epsilon (linear by timesteps)"
+        schedule_name = str(metrics.get("epsilon_schedule", "")).lower()
+        if schedule_name == "exp_by_timesteps":
+            x_eps, y_eps, x_label = _epsilon_curve_sb3_exponential(
+                timesteps=timesteps,
+                epsilon_start=epsilon_start,
+                epsilon_min=epsilon_final,
+                warmup_steps=int(metrics.get("epsilon_warmup_steps", 0)),
+                decay_steps=float(metrics.get("epsilon_decay_steps", 1.0)),
+            )
+            curve_label = "sb3 epsilon (exp by timesteps)"
+        else:
+            x_eps, y_eps, x_label = _epsilon_curve_sb3(
+                timesteps=timesteps,
+                epsilon_start=epsilon_start,
+                epsilon_final=epsilon_final,
+                exploration_fraction=sb3_exploration_fraction,
+            )
+            curve_label = "sb3 epsilon (linear by timesteps)"
     else:
         raise ValueError(f"Unsupported model in {run_dir / 'metrics.json'}: {model}")
 

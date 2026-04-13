@@ -12,6 +12,21 @@ from src.dqn import DQN
 from src.utils import record_policy_video_from_config
 
 
+def _build_dqn_cfg_for_loading() -> dict:
+    return {
+        "gamma": TRAINING_CONFIG["gamma"],
+        "batch_size": TRAINING_CONFIG["batch_size"],
+        "buffer_capacity": TRAINING_CONFIG["buffer_capacity"],
+        "update_target_every": TRAINING_CONFIG["update_target_every"],
+        "epsilon_start": TRAINING_CONFIG["epsilon_start"],
+        "decrease_epsilon_factor": TRAINING_CONFIG["decrease_epsilon_factor"],
+        "epsilon_min": TRAINING_CONFIG["epsilon_min"],
+        "learning_rate": TRAINING_CONFIG["learning_rate"],
+        "gradient_clip_norm": TRAINING_CONFIG["gradient_clip_norm"],
+        "epsilon_warmup_episodes": 0,
+    }
+
+
 def _infer_run_dir_from_checkpoint(checkpoint_path: Path) -> Path:
     # Final custom checkpoint: <run_dir>/custom_dqn_qnet.pt
     # Intermediate custom checkpoint: <run_dir>/checkpoints/custom_dqn_qnet_ep_XXXXXX.pt
@@ -43,7 +58,7 @@ def load_custom_agent(checkpoint_path: Path) -> DQN:
     )
     action_space = env.single_action_space
     observation_space = env.single_observation_space
-    dqn_cfg = {k: v for k, v in TRAINING_CONFIG.items() if k != "num_envs"}
+    dqn_cfg = _build_dqn_cfg_for_loading()
     dqn_cfg.update(_load_custom_model_config(checkpoint_path))
     agent = DQN(action_space=action_space, observation_space=observation_space, **dqn_cfg)
 

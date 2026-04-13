@@ -229,6 +229,8 @@ class DQN:
         decrease_epsilon_factor,
         epsilon_min,
         learning_rate,
+        epsilon_warmup_episodes=0,
+        gradient_clip_norm=100.0,
         network_type="flat_mlp",
         pooling="mean",
     ):
@@ -245,8 +247,10 @@ class DQN:
             decrease_epsilon_factor  # larger -> more exploration
         )
         self.epsilon_min = epsilon_min
+        self.epsilon_warmup_episodes = max(0, int(epsilon_warmup_episodes))
 
         self.learning_rate = learning_rate
+        self.gradient_clip_norm = float(gradient_clip_norm)
         self.network_type = network_type
         self.pooling = pooling
 
@@ -283,7 +287,9 @@ class DQN:
         # Optimize the model
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_value_(self.q_net.parameters(), 100)
+        torch.nn.utils.clip_grad_norm_(
+            self.q_net.parameters(), max_norm=self.gradient_clip_norm
+        )
         self.optimizer.step()
 
         if not ((self.n_steps + 1) % self.update_target_every):
@@ -319,8 +325,13 @@ class DQN:
         return output.numpy()[0]
 
     def decrease_epsilon(self):
+        if self.n_eps < self.epsilon_warmup_episodes:
+            self.epsilon = self.epsilon_start
+            return
+
+        decayed_episodes = self.n_eps - self.epsilon_warmup_episodes
         self.epsilon = self.epsilon_min + (self.epsilon_start - self.epsilon_min) * (
-            np.exp(-1.0 * self.n_eps / self.decrease_epsilon_factor)
+            np.exp(-1.0 * decayed_episodes / self.decrease_epsilon_factor)
         )
 
     def reset(self):
@@ -361,7 +372,7 @@ class DQN:
                 "Use one of: flat_mlp, shared_pool, pairwise_ego."
             )
 
-        self.loss_function = nn.MSELoss()
+        self.loss_function = nn.SmoothL1Loss()
         self.optimizer = optim.Adam(
             params=self.q_net.parameters(), lr=self.learning_rate
         )
@@ -383,6 +394,8 @@ class REINFORCEBaseline(DQN):
         decrease_epsilon_factor,
         epsilon_min,
         learning_rate,
+        epsilon_warmup_episodes=0,
+        gradient_clip_norm=100.0,
         network_type="flat_mlp",
         pooling="mean",
     ):
@@ -396,6 +409,8 @@ class REINFORCEBaseline(DQN):
         decrease_epsilon_factor,
         epsilon_min,
         learning_rate,
+        epsilon_warmup_episodes,
+        gradient_clip_norm,
         network_type,
         pooling)
         
