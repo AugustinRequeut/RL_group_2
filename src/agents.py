@@ -420,7 +420,7 @@ class ActorCriticBasic:
 
         discounts = self.gamma ** torch.arange(len(rewards), dtype=torch.float32)
         weighted_advantages = discounts * advantages
-        selected_log_probs = log_probs.gather(1, actions).squeeze()
+        selected_log_probs = log_probs.gather(1, actions).view(-1)
         score = torch.dot(selected_log_probs, weighted_advantages).unsqueeze(0)
 
         return score
