@@ -1,41 +1,90 @@
 from tqdm import tqdm
 import numpy as np
 
-def train_agent(env, agent, n_episodes, eval_every=20):
+
+def train_agent(
+    env,
+    agent,
+    n_episodes=None,
+    total_timesteps=None,
+    eval_every=50,
+    on_episode_end=None,
+):
+    if (n_episodes is None) == (total_timesteps is None):
+        raise ValueError("Specify exactly one of `n_episodes` or `total_timesteps`.")
+
     all_losses = []
     all_rewards = []
-    episode_rewards = np.zeros(env.num_envs)  # track reward per env
+    episode_rewards = np.zeros(env.num_envs, dtype=np.float32)
 
     states, _ = env.reset()
     completed_episodes = 0
+    steps_collected = 0
 
-    with tqdm(total=n_episodes, desc="Training Progress") as pbar:
-        while completed_episodes < n_episodes:
+    if n_episodes is not None:
+        progress_total = n_episodes
+        progress_desc = "Training Progress (episodes)"
+    else:
+        progress_total = total_timesteps
+        progress_desc = "Training Progress (timesteps)"
+
+    with tqdm(total=progress_total, desc=progress_desc) as pbar:
+        while True:
+            if n_episodes is not None and completed_episodes >= n_episodes:
+                break
+            if total_timesteps is not None and steps_collected >= total_timesteps:
+                break
+
             actions = np.array([agent.get_action(s) for s in states])
             next_states, rewards, terminateds, truncateds, _ = env.step(actions)
 
-            # Push one transition per parallel env
             for i in range(env.num_envs):
                 loss = agent.update(
-                    states[i], actions[i], rewards[i],
-                    terminateds[i], truncateds[i], next_states[i]
+                    states[i],
+                    int(actions[i]),
+                    float(rewards[i]),
+                    bool(terminateds[i]),
+                    bool(truncateds[i]),
+                    next_states[i],
                 )
                 if loss is not None:
-                    all_losses.append(loss)
+                    loss_arr = np.asarray(loss, dtype=np.float32).reshape(-1)
+                    if loss_arr.size > 0:
+                        loss_value = float(loss_arr[0])
+                        if np.isfinite(loss_value):
+                            all_losses.append(loss_value)
 
             episode_rewards += rewards
-
-            # Detect completed episodes (any env that terminated or truncated)
             dones = terminateds | truncateds
             for i, done in enumerate(dones):
                 if done:
-                    all_rewards.append(episode_rewards[i])
-                    episode_rewards[i] = 0
+                    episode_reward = float(episode_rewards[i])
+                    all_rewards.append(episode_reward)
+                    episode_rewards[i] = 0.0
                     completed_episodes += 1
-                    pbar.update(1)
-                    if completed_episodes % eval_every == 0:
-                        tqdm.write(f" Ep {completed_episodes}: Last Reward = {all_rewards[-1]:.2f}")
+                    if on_episode_end is not None:
+                        on_episode_end(
+                            completed_episodes,
+                            episode_reward,
+                            all_rewards,
+                            all_losses,
+                        )
+                    if n_episodes is not None:
+                        pbar.update(1)
+                    if eval_every > 0 and completed_episodes % eval_every == 0:
+                        recent = all_rewards[-eval_every:]
+                        recent_mean = float(np.mean(recent)) if recent else float("nan")
+                        tqdm.write(
+                            f" Ep {completed_episodes}: "
+                            f"Last Reward = {all_rewards[-1]:.2f} | "
+                            f"Mean(last {eval_every}) = {recent_mean:.2f}"
+                        )
 
             states = next_states
+
+            if total_timesteps is not None:
+                step_inc = min(env.num_envs, total_timesteps - steps_collected)
+                steps_collected += env.num_envs
+                pbar.update(step_inc)
 
     return all_losses, all_rewards
