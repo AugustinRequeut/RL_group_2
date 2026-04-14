@@ -9,7 +9,10 @@ from stable_baselines3 import DQN as SB3DQN
 
 from src.config import SHARED_CORE_CONFIG, SHARED_CORE_ENV_ID, TRAINING_CONFIG
 from src.dqn import DQN
-from src.utils import record_policy_video_from_config
+from src.utils import (
+    record_policy_video_from_config,
+    record_policy_video_with_overlay_from_config,
+)
 
 
 def _build_dqn_cfg_for_loading() -> dict:
@@ -88,7 +91,24 @@ def main() -> None:
         action="store_true",
         help="Enable headless/offscreen rendering (safer on servers, can produce black videos).",
     )
+    parser.add_argument(
+        "--overlay-reward",
+        action="store_true",
+        help="Overlay per-step reward and cumulative total reward on video frames.",
+    )
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help=(
+            "Playback speed multiplier for output videos. "
+            "For overlay mode, speed is applied by increasing output FPS without dropping frames."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.speed <= 0:
+        raise ValueError(f"--speed must be > 0, got {args.speed}")
 
     checkpoint_path = Path(args.checkpoint)
     if not checkpoint_path.exists():
@@ -105,20 +125,41 @@ def main() -> None:
         predictor = lambda obs: model.predict(obs, deterministic=True)[0]
 
     rewards = []
+    saved_paths: list[Path] = []
     for i in range(args.n_videos):
-        rewards.append(
-            record_policy_video_from_config(
-                policy_fn=predictor,
-                env_id=SHARED_CORE_ENV_ID,
-                env_config=SHARED_CORE_CONFIG,
-                save_dir=str(out_dir),
-                name_prefix=f"{args.algo}_rollout_{i}",
-                seed=args.seed + i,
-                headless=args.headless,
+        run_seed = args.seed + i
+        if args.overlay_reward:
+            output_path = out_dir / f"{args.algo}_rollout_{i}_annotated.mp4"
+            rewards.append(
+                record_policy_video_with_overlay_from_config(
+                    policy_fn=predictor,
+                    env_id=SHARED_CORE_ENV_ID,
+                    env_config=SHARED_CORE_CONFIG,
+                    save_path=str(output_path),
+                    seed=run_seed,
+                    headless=args.headless,
+                    speed=args.speed,
+                )
             )
-        )
+            saved_paths.append(output_path)
+        else:
+            rewards.append(
+                record_policy_video_from_config(
+                    policy_fn=predictor,
+                    env_id=SHARED_CORE_ENV_ID,
+                    env_config=SHARED_CORE_CONFIG,
+                    save_dir=str(out_dir),
+                    name_prefix=f"{args.algo}_rollout_{i}",
+                    seed=run_seed,
+                    headless=args.headless,
+                )
+            )
 
     print(f"Saved {args.n_videos} videos to: {out_dir}")
+    if saved_paths:
+        print("Annotated video paths:")
+        for path in saved_paths:
+            print(f"- {path}")
     print(f"Rewards: {[round(r, 2) for r in rewards]}")
 
 

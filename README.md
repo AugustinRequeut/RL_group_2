@@ -38,6 +38,23 @@ Options utiles:
 - `--quick` (defaut rapide: `5000` timesteps et `10` eval-runs pour custom/sb3)
 - `--no-eval`
 
+### 2.1 Architectures custom: `shared_pool` et `pairwise_ego`
+
+Observation d'entree: matrice `(10, 5)` avec `ego` en index 0 et `9` voitures non-ego.
+
+`shared_pool`:
+- chaque non-ego passe dans un MLP partage `phi: 5 -> 128 -> 128`
+- on applique un pooling (`mean` ou `max`) sur les embeddings non-ego
+- on concatene ce vecteur avec les features `ego` (dim totale `5 + 128 = 133`)
+- tete finale `133 -> 128 -> 128 -> n_actions`
+
+`pairwise_ego`:
+- chaque non-ego passe aussi dans `phi: 5 -> 128 -> 128`
+- pour chaque voiture `i`, on construit une paire `concat(ego, phi_i)` (dim `133`)
+- cette paire passe dans un MLP partage `psi: 133 -> 128 -> 128`
+- on pool (`mean` ou `max`) sur les embeddings de paires
+- tete finale `133 -> 128 -> 128 -> n_actions`
+
 ## 3) Entrainement: commandes utiles
 
 ### 3.1 Run rapide (smoke)
@@ -206,8 +223,6 @@ SB3:
   --output-dir results/recorded_rollouts
 ```
 
-Note:
-- eviter `--headless` si vous voulez une video non-noire sur machine locale avec affichage.
 
 ## 7) Replot des courbes a partir des JSON
 
