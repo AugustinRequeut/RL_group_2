@@ -1,31 +1,65 @@
-# RL Group 2 - DQN (Custom vs SB3)
+# Reinforcement Learning Project (Group 2)
 
-Comparaison entre:
-- un DQN custom (`src/dqn.py`)
-- un DQN Stable-Baselines3 (`stable_baselines3.DQN`)
+## Installation and Execution
 
-Benchmark commun:
-- env: `highway-v0`
-- config commune: `src/config.py` (`SHARED_CORE_CONFIG`)
-- script principal: `main.py` (CLI unifiee)
-
-## 1) Installation
+**1. Clone the repository**
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+git clone https://github.com/AugustinRequeut/RL_group_2.git
+```
+
+**2. Create a virtual environment**
+
+```bash
+python -m venv venv
+# On Linux/macOS:
+source venv/bin/activate
+# On Windows:
+venv\Scripts\activate
+```
+
+**3. Install dependencies**
+
+```bash
 pip install -r requirements.txt
 ```
 
-## 2) Commande principale
+**4. Start training**
 
-Tout passe par:
+The training configuration can be changed in `src/config.py`.
+
+The choice of training algorithm can be changed via CLI in `main.py`.
+
+To start training, run for example:
+
+```bash
+./.venv/bin/python main.py --model custom --quick
+```
+
+## Environment
+
+The project is based on the Gymnasium environment `highway-v0`, with a custom configuration defined in `src/config.py`.
+
+## DQN (Custom vs SB3) - Detailed Usage
+
+Comparison between:
+- a custom DQN (`src/dqn.py`)
+- a Stable-Baselines3 DQN (`stable_baselines3.DQN`)
+
+Shared benchmark setup:
+- env: `highway-v0`
+- shared config: `src/config.py` (`SHARED_CORE_CONFIG`)
+- main script: `main.py` (unified CLI)
+
+## 1) Main command
+
+Everything goes through:
 
 ```bash
 ./.venv/bin/python main.py --model {custom|sb3|reinforce} [options]
 ```
 
-Options utiles:
+Useful options:
 - `--seed`
 - `--timesteps` (custom/sb3)
 - `--episodes` (reinforce)
@@ -33,45 +67,45 @@ Options utiles:
 - `--num-envs`
 - `--custom-network {flat_mlp,shared_pool,pairwise_ego}`
 - `--pooling {mean,max}`
-- `--checkpoint-every-episodes` (defaut: `100`)
-- `--save-json-every-episodes` (defaut: `100`)
-- `--quick` (defaut rapide: `5000` timesteps et `10` eval-runs pour custom/sb3)
+- `--checkpoint-every-episodes` (default: `100`)
+- `--save-json-every-episodes` (default: `100`)
+- `--quick` (quick default: `5000` timesteps and `10` eval-runs for custom/sb3)
 - `--no-eval`
 
-### 2.1 Architectures custom: `shared_pool` et `pairwise_ego`
+### 1.1 Custom architectures: `shared_pool` and `pairwise_ego`
 
-Observation d'entree: matrice `(10, 5)` avec `ego` en index 0 et `9` voitures non-ego.
+Input observation: matrix `(10, 5)` with `ego` at index 0 and `9` non-ego vehicles.
 
 `shared_pool`:
-- chaque non-ego passe dans un MLP partage `phi: 5 -> 128 -> 128`
-- on applique un pooling (`mean` ou `max`) sur les embeddings non-ego
-- on concatene ce vecteur avec les features `ego` (dim totale `5 + 128 = 133`)
-- tete finale `133 -> 128 -> 128 -> n_actions`
+- each non-ego vehicle is passed through a shared MLP `phi: 5 -> 128 -> 128`
+- pooling (`mean` or `max`) is applied over non-ego embeddings
+- this pooled vector is concatenated with `ego` features (total dim `5 + 128 = 133`)
+- final head `133 -> 128 -> 128 -> n_actions`
 
 `pairwise_ego`:
-- chaque non-ego passe aussi dans `phi: 5 -> 128 -> 128`
-- pour chaque voiture `i`, on construit une paire `concat(ego, phi_i)` (dim `133`)
-- cette paire passe dans un MLP partage `psi: 133 -> 128 -> 128`
-- on pool (`mean` ou `max`) sur les embeddings de paires
-- tete finale `133 -> 128 -> 128 -> n_actions`
+- each non-ego vehicle is also passed through `phi: 5 -> 128 -> 128`
+- for each vehicle `i`, a pair `concat(ego, phi_i)` is built (dim `133`)
+- this pair is passed through a shared MLP `psi: 133 -> 128 -> 128`
+- pair embeddings are pooled (`mean` or `max`)
+- final head `133 -> 128 -> 128 -> n_actions`
 
-## 3) Entrainement: commandes utiles
+## 2) Training: useful commands
 
-### 3.1 Run rapide (smoke)
+### 2.1 Quick run (smoke test)
 
 ```bash
 ./.venv/bin/python main.py --model custom --quick --seed 0 --output-dir results/custom_dqn/quick
 ./.venv/bin/python main.py --model sb3 --quick --seed 0 --output-dir results/sb3_dqn/quick
 ```
 
-### 3.2 Run complet 50k timesteps, 50 eval-runs (1 seed)
+### 2.2 Full run: 50k timesteps, 50 eval-runs (1 seed)
 
 ```bash
 ./.venv/bin/python main.py --model custom --seed 0 --timesteps 50000 --eval-runs 50 --custom-network flat_mlp --output-dir results/custom_dqn/flat_mlp
 ./.venv/bin/python main.py --model sb3 --seed 0 --timesteps 50000 --eval-runs 50 --output-dir results/sb3_dqn/flat_mlp
 ```
 
-### 3.3 Lancer 3 seeds en parallele (flat MLP)
+### 2.3 Run 3 seeds in parallel (flat MLP)
 
 Custom:
 ```bash
@@ -90,7 +124,7 @@ seq 0 2 | xargs -I{} -P 3 ./.venv/bin/python main.py \
   --output-dir results/sb3_dqn/flat_mlp
 ```
 
-### 3.4 Lancer les variantes custom structurelles (1 seed, en parallele)
+### 2.4 Run custom structural variants (1 seed, in parallel)
 
 ```bash
 SEED=0
@@ -101,25 +135,25 @@ SEED=0
 wait
 ```
 
-## 4) Artifacts sauvegardes
+## 3) Saved artifacts
 
-Par run (`.../seed_X/`):
+For each run (`.../seed_X/`):
 - `metrics.json`
 - `train_episode_rewards.json`
 - `train_losses.json`
 - `training_curves.png` (loss + rewards + epsilon)
-- `eval_rewards.json` (si eval activee)
-- checkpoint final:
+- `eval_rewards.json` (if evaluation is enabled)
+- final checkpoint:
   - custom: `custom_dqn_qnet.pt`
   - sb3: `sb3_dqn_model.zip`
-- checkpoints intermediaires (`checkpoints/`) tous les `N` episodes si active.
+- intermediate checkpoints (`checkpoints/`) every `N` episodes if enabled.
 
-## 5) Evaluer les checkpoints (intermediaires + final)
+## 4) Evaluate checkpoints (intermediate + final)
 
 Script: `evaluate_custom_checkpoints.py`  
-Supporte `--algo custom` et `--algo sb3`.
+Supports `--algo custom` and `--algo sb3`.
 
-Exemple custom:
+Custom example:
 ```bash
 RUN="results/custom_dqn/flat_mlp/seed_0"
 MPLCONFIGDIR=/tmp/.mpl ./.venv/bin/python evaluate_custom_checkpoints.py \
@@ -131,7 +165,7 @@ MPLCONFIGDIR=/tmp/.mpl ./.venv/bin/python evaluate_custom_checkpoints.py \
   --output "$RUN/checkpoint_eval_diagnostics.json"
 ```
 
-Exemple sb3:
+SB3 example:
 ```bash
 RUN="results/sb3_dqn/flat_mlp/seed_0"
 MPLCONFIGDIR=/tmp/.mpl ./.venv/bin/python evaluate_custom_checkpoints.py \
@@ -143,11 +177,12 @@ MPLCONFIGDIR=/tmp/.mpl ./.venv/bin/python evaluate_custom_checkpoints.py \
   --output "$RUN/checkpoint_eval_diagnostics.json"
 ```
 
-Sorties:
-- JSON de diagnostics par checkpoint
-- plot `checkpoint_eval_evolution_ci95.png` (crash rate, mean speed, mean reward + CI95)
+Outputs:
+- diagnostics JSON per checkpoint
+- plot `checkpoint_eval_evolution_ci95.png` (crash rate, mean speed, mean reward + 95% CI)
 
-### 5.1 Eval checkpoints intermediaires pour 3 seeds 
+### 4.1 Evaluate intermediate checkpoints for 3 seeds
+
 ```bash
 EP=50
 SEED_START=40000
@@ -198,10 +233,10 @@ do
 done
 ```
 
-## 6) Generer des videos a partir de checkpoints deja entraines
+## 5) Generate videos from already-trained checkpoints
 
 Script: `record_trained_videos.py`  
-Les videos ne sont pas enregistrees pendant le train.
+Videos are not recorded during training.
 
 Custom:
 ```bash
@@ -223,8 +258,7 @@ SB3:
   --output-dir results/recorded_rollouts
 ```
 
-
-## 7) Replot des courbes a partir des JSON
+## 6) Replot curves from JSON
 
 Script: `plot_training_curves_from_json.py`
 
@@ -235,7 +269,7 @@ MPLCONFIGDIR=/tmp/.mpl ./.venv/bin/python plot_training_curves_from_json.py \
   --ma-window 100
 ```
 
-## 8) Comparaison finale custom vs sb3 (3 seeds)
+## 7) Final custom vs sb3 comparison (3 seeds)
 
 ```bash
 ./.venv/bin/python compare_dqn_results.py \
@@ -244,6 +278,15 @@ MPLCONFIGDIR=/tmp/.mpl ./.venv/bin/python plot_training_curves_from_json.py \
   --output results/dqn_comparison_flat_mlp.json
 ```
 
-Le script calcule:
-- moyenne et ecart-type des rewards moyens par seed
-- difference pairee custom - sb3 sur seeds communes
+This script computes:
+- mean and standard deviation of mean rewards per seed
+- paired difference custom - sb3 over common seeds
+
+## Authors
+
+| Name               | Email                                                                       |
+| ------------------ | --------------------------------------------------------------------------- |
+| Martinelli Mickael | [mickael.martinelli@student-cs.fr](mailto:mickael.martinelli@student-cs.fr) |
+| Musina Karina      | [karina.musina@student-cs.fr](mailto:karina.musina@student-cs.fr)           |
+| Oiknine Nathan     | [nathan.oiknine@student-cs.fr](mailto:nathan.oiknine@student-cs.fr)         |
+| Requeut Augustin   | [augustin.requeut@student-cs.fr](mailto:augustin.requeut@student-cs.fr)     |
