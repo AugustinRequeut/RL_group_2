@@ -30,7 +30,7 @@ def main():
 
     plot_learning_curves(losses, rewards, agent.epsilon_history)
 
-    final_scores = evaluate_policy(agent, eval_env, n_runs=5)
+    final_scores = evaluate_policy(agent, eval_env, n_runs=50)
     print(f"Final Reward : {np.mean(final_scores):.2f} (+/- {np.std(final_scores):.2f})")
 
     record_final_agent_video(agent, render_env=render_env)
